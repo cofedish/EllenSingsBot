@@ -4,10 +4,6 @@ services:
     container_name: ellensings-bot
     restart: unless-stopped
 
-    # Host network mode - контейнер в сети хоста
-    # Позволяет tun2socks подключаться к signbox на 127.0.0.1
-    network_mode: host
-
     # NET_ADMIN нужен для tun2socks (создание TUN интерфейса)
     cap_add:
       - NET_ADMIN
@@ -16,13 +12,17 @@ services:
     devices:
       - /dev/net/tun:/dev/net/tun
 
+    # Доступ к хосту для подключения к signbox
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
     # Переменные окружения
     environment:
       - TZ=Europe/Moscow
       - DISCORD_TOKEN=${DISCORD_TOKEN}
       # SOCKS proxy для tun2socks (весь трафик TCP+UDP)
-      # В host mode можно использовать localhost
-      - SOCKS_PROXY=${SOCKS_PROXY:-socks5://127.0.0.1:2080}
+      # host.docker.internal указывает на хост из контейнера
+      - SOCKS_PROXY=${SOCKS_PROXY:-socks5://host.docker.internal:2080}
 
     # Volumes
     volumes:
