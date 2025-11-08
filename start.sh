@@ -24,7 +24,7 @@ ip route add default dev tun0
 
 echo "Starting tun2socks with proxy: $SOCKS_PROXY"
 # Запускаем tun2socks
-tun2socks -device tun0 -proxy "$SOCKS_PROXY" &
+./tun2socks -device tun0 -proxy "$SOCKS_PROXY" &
 TUN2SOCKS_PID=$!
 
 # Проверяем что tun2socks запустился
