@@ -47,22 +47,13 @@ def get_proxy_config():
             logger.info("This is normal - Discord API connects directly, music downloads go through proxy")
             return None, None, None
 
-        # HTTP/HTTPS прокси - поддерживается discord.py напрямую
-        # НЕ создаём connector - discord.py сам создаст правильный
-        proxy_auth = None
-        clean_url = proxy_url
-
-        # Извлекаем авторизацию если есть
-        if '@' in proxy_url:
-            auth_part = proxy_url.split('//')[1].split('@')[0]
-            if ':' in auth_part:
-                username, password = auth_part.split(':', 1)
-                proxy_auth = aiohttp.BasicAuth(username, password)
-                # Убираем auth из URL
-                clean_url = proxy_url.replace(f"{auth_part}@", "")
-
-        logger.info(f"Using HTTP(S) proxy for Discord API: {clean_url.split('@')[-1]}")
-        return None, clean_url, proxy_auth  # connector=None для HTTP прокси!
+        # HTTP/HTTPS прокси - но НЕ для Discord API!
+        # Discord Voice использует UDP, который не работает через HTTP proxy
+        # Прокси будет использоваться только в yt-dlp
+        logger.info(f"HTTP proxy detected: {proxy_url.split('@')[-1]}")
+        logger.info("HTTP proxy will be used for yt-dlp only (Discord API connects directly)")
+        logger.info("This is required for voice connections (UDP doesn't work through HTTP proxy)")
+        return None, None, None  # Без прокси для Discord API
 
     except Exception as e:
         logger.error(f"Failed to parse proxy config: {e}")
