@@ -6,7 +6,7 @@ echo "EllenSings Bot with tun2socks"
 echo "=========================================="
 
 # Получаем SOCKS proxy из ENV (default для signbox на хосте)
-SOCKS_PROXY="${SOCKS_PROXY:-socks5://host.docker.internal:2080}"
+SOCKS_PROXY="${PROXY_URL}"
 
 echo "Configuring TUN interface..."
 # Настройка TUN-интерфейса

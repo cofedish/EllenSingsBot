@@ -13,6 +13,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libavcodec-dev \
     libavformat-dev \
     libswresample-dev \
+    netcat-openbsd \
     libopus-dev \
     libsodium-dev \
     libgirepository1.0-dev \
