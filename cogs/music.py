@@ -359,6 +359,9 @@ class Music(commands.Cog):
     async def play(self, ctx: commands.Context, *, query: str):
         """Добавить трек в очередь и начать воспроизведение"""
 
+        # Defer сразу - Discord дает только 3 секунды на ответ
+        await ctx.defer()
+
         # Проверка: пользователь в голосовом канале
         if not ctx.author.voice:
             embed = discord.Embed(
@@ -384,7 +387,6 @@ class Music(commands.Cog):
                 return await ctx.send(embed=embed)
 
         # Загрузка трека
-        await ctx.defer()
 
         try:
             player = await YTDLSource.from_url(query, loop=self.bot.loop, stream=True)

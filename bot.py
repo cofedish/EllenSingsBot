@@ -137,17 +137,29 @@ class MusicBot(commands.Bot):
                 description=f"Отсутствует аргумент: `{error.param.name}`",
                 color=0xFF6B6B
             )
-            await ctx.send(embed=embed, ephemeral=True)
+            try:
+                await ctx.send(embed=embed, ephemeral=True)
+            except discord.NotFound:
+                # Interaction истёк, просто логируем
+                logger.warning(f"Could not send error message: interaction expired")
             return
 
         logger.error(f"Command error: {error}", exc_info=error)
 
+        # Пытаемся отправить сообщение об ошибке
         embed = discord.Embed(
             title="❌ Произошла ошибка",
             description=str(error),
             color=0xFF6B6B
         )
-        await ctx.send(embed=embed)
+
+        try:
+            await ctx.send(embed=embed)
+        except discord.NotFound:
+            # Interaction истёк, ничего не делаем
+            logger.warning(f"Could not send error message: interaction expired")
+        except Exception as e:
+            logger.error(f"Failed to send error message: {e}")
 
 
 # Создаём и запускаем бота
