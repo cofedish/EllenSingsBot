@@ -5,18 +5,20 @@ services:
     restart: unless-stopped
 
     # Host network mode - контейнер в сети хоста
-    # Для Linux: позволяет использовать 127.0.0.1 для прокси на хосте
-    # Для Windows/Mac: используйте host.docker.internal вместо 127.0.0.1
+    # Позволяет tun2socks подключаться к signbox на 127.0.0.1
     network_mode: host
+
+    # NET_ADMIN нужен для tun2socks (создание TUN интерфейса)
+    cap_add:
+      - NET_ADMIN
 
     # Переменные окружения
     environment:
       - TZ=Europe/Moscow
       - DISCORD_TOKEN=${DISCORD_TOKEN}
-      # Прокси для всего трафика бота
-      # В host mode на Linux можно использовать localhost:
-      # PROXY_URL=socks5://127.0.0.1:2080
-      - PROXY_URL=${PROXY_URL:-}
+      # SOCKS proxy для tun2socks (весь трафик TCP+UDP)
+      # В host mode можно использовать localhost
+      - SOCKS_PROXY=${SOCKS_PROXY:-socks5://127.0.0.1:2080}
 
     # Volumes
     volumes:

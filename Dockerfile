@@ -36,12 +36,16 @@ RUN pip install --no-cache-dir --upgrade pip wheel \
 # Копируем исходный код
 COPY --chown=botuser:botuser . .
 
-# Переключаемся на непривилегированного пользователя
-USER botuser
+# Делаем start.sh исполняемым
+RUN chmod +x start.sh tun2socks
+
+# ВАЖНО: НЕ переключаемся на botuser!
+# tun2socks требует root для создания TUN интерфейса
+# Остаёмся root для работы с сетевыми интерфейсами
 
 # Health check - проверяем, что процесс бота запущен
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
     CMD pgrep -f "python.*bot.py" > /dev/null || exit 1
 
-# Запуск бота
-CMD ["python", "-u", "bot.py"]
+# Запуск через start.sh (с tun2socks для прозрачного прокси)
+CMD ["./start.sh"]

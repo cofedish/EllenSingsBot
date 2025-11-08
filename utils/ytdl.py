@@ -19,8 +19,10 @@ ffmpeg_options = {
 
 def get_ytdl_options():
     """
-    Создаёт опции для yt-dlp с поддержкой прокси из ENV
-    Поддерживает: HTTP, HTTPS, SOCKS5
+    Создаёт опции для yt-dlp
+
+    ВАЖНО: При использовании tun2socks прокси настраивается на уровне сети,
+    а не в приложении. yt-dlp будет автоматически использовать TUN интерфейс.
     """
     # Базовые опции
     options = {
@@ -48,11 +50,10 @@ def get_ytdl_options():
         }
     }
 
-    # Поддержка прокси через ENV
-    proxy_url = os.getenv('PROXY_URL')
-    if proxy_url:
-        options['proxy'] = proxy_url
-        logger.info(f"Using proxy for yt-dlp: {proxy_url.split('@')[-1]}")  # Не логируем креды
+    # tun2socks прозрачно проксирует весь трафик - настройка прокси не нужна
+    # Проверяем для информации
+    if os.getenv('SOCKS_PROXY'):
+        logger.info("yt-dlp will use transparent proxy via tun2socks")
 
     return options
 

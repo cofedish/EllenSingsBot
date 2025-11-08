@@ -25,39 +25,22 @@ def get_proxy_config():
     """
     Возвращает конфигурацию прокси из ENV для discord.py
 
-    ВАЖНО: SOCKS прокси не поддерживается в discord.py напрямую
-    (требует event loop при создании connector).
-    SOCKS используется только в yt-dlp, не в Discord API.
+    ВАЖНО: При использовании tun2socks прокси НЕ нужен в discord.py!
+    tun2socks прозрачно проксирует весь трафик (TCP+UDP) на уровне сети.
+    Bot работает как обычно, не зная о прокси.
 
     Returns:
-        tuple: (connector, proxy_url, proxy_auth)
+        tuple: (connector, proxy_url, proxy_auth) - всегда None
     """
-    proxy_url = os.getenv('PROXY_URL')
+    # Проверяем переменную для совместимости
+    socks_proxy = os.getenv('SOCKS_PROXY')
+    if socks_proxy:
+        logger.info(f"SOCKS proxy configured via tun2socks: {socks_proxy.split('@')[-1]}")
+        logger.info("All traffic (TCP+UDP) is transparently proxied at network level")
+        logger.info("Discord API and Voice will work through proxy automatically")
 
-    if not proxy_url:
-        logger.info("No proxy configured, using direct connection")
-        return None, None, None
-
-    try:
-        # SOCKS прокси - не поддерживается в Discord API
-        # Будет использоваться только в yt-dlp
-        if proxy_url.startswith('socks5://') or proxy_url.startswith('socks4://'):
-            logger.info(f"SOCKS proxy detected: {proxy_url.split('@')[-1]}")
-            logger.info("SOCKS proxy will be used for yt-dlp only (Discord API uses direct connection)")
-            logger.info("This is normal - Discord API connects directly, music downloads go through proxy")
-            return None, None, None
-
-        # HTTP/HTTPS прокси - но НЕ для Discord API!
-        # Discord Voice использует UDP, который не работает через HTTP proxy
-        # Прокси будет использоваться только в yt-dlp
-        logger.info(f"HTTP proxy detected: {proxy_url.split('@')[-1]}")
-        logger.info("HTTP proxy will be used for yt-dlp only (Discord API connects directly)")
-        logger.info("This is required for voice connections (UDP doesn't work through HTTP proxy)")
-        return None, None, None  # Без прокси для Discord API
-
-    except Exception as e:
-        logger.error(f"Failed to parse proxy config: {e}")
-        return None, None, None
+    # Возвращаем None - прокси на уровне приложения не нужен
+    return None, None, None
 
 
 class MusicBot(commands.Bot):
