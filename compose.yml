@@ -1,0 +1,42 @@
+version: '3.8'
+
+services:
+  discord-bot:
+    build: .
+    container_name: ellensings-bot
+    restart: unless-stopped
+
+    # Host network mode - контейнер в сети хоста
+    # Для Linux: позволяет использовать 127.0.0.1 для прокси на хосте
+    # Для Windows/Mac: используйте host.docker.internal вместо 127.0.0.1
+    network_mode: host
+
+    # Переменные окружения
+    environment:
+      - TZ=Europe/Moscow
+      - DISCORD_TOKEN=${DISCORD_TOKEN}
+      # Прокси для всего трафика бота
+      # В host mode на Linux можно использовать localhost:
+      # PROXY_URL=socks5://127.0.0.1:2080
+      - PROXY_URL=${PROXY_URL:-}
+
+    # Volumes
+    volumes:
+      - ./sounds:/app/sounds:ro
+      # .env файл пробрасываем для удобства разработки
+      - ./.env:/app/.env:ro
+
+    # Логирование
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+    # Health check
+    healthcheck:
+      test: ["CMD", "pgrep", "-f", "python.*bot.py"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
