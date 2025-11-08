@@ -12,6 +12,10 @@ services:
     cap_add:
       - NET_ADMIN
 
+    # Доступ к TUN устройству для tun2socks
+    devices:
+      - /dev/net/tun:/dev/net/tun
+
     # Переменные окружения
     environment:
       - TZ=Europe/Moscow
