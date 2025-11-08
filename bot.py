@@ -47,8 +47,8 @@ def get_proxy_config():
             logger.info("This is normal - Discord API connects directly, music downloads go through proxy")
             return None, None, None
 
-        # HTTP/HTTPS прокси - поддерживается discord.py
-        connector = aiohttp.TCPConnector()
+        # HTTP/HTTPS прокси - поддерживается discord.py напрямую
+        # НЕ создаём connector - discord.py сам создаст правильный
         proxy_auth = None
         clean_url = proxy_url
 
@@ -62,7 +62,7 @@ def get_proxy_config():
                 clean_url = proxy_url.replace(f"{auth_part}@", "")
 
         logger.info(f"Using HTTP(S) proxy for Discord API: {clean_url.split('@')[-1]}")
-        return connector, clean_url, proxy_auth
+        return None, clean_url, proxy_auth  # connector=None для HTTP прокси!
 
     except Exception as e:
         logger.error(f"Failed to parse proxy config: {e}")
