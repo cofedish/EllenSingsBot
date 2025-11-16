@@ -29,7 +29,7 @@ def get_ytdl_options():
         'format': 'bestaudio/best',
         'outtmpl': '%(extractor)s-%(id)s-%(title)s.%(ext)s',
         'restrictfilenames': True,
-        'noplaylist': True,
+        'noplaylist': False,  # Разрешаем плейлисты
         'nocheckcertificate': True,
         'ignoreerrors': False,
         'logtostderr': False,
@@ -39,6 +39,7 @@ def get_ytdl_options():
         'source_address': '0.0.0.0',
         'socket_timeout': 60,
         'extractor_retries': 3,
+        'extract_flat': False,  # Извлекаем полную информацию
         'http_headers': {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0',
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
