@@ -62,4 +62,6 @@ jobs:
           platforms: linux/amd64,linux/arm64
 
       - name: Image digest
-        run: echo ${{ steps.meta.outputs.tags }}
+        run: |
+          echo "Built and pushed the following tags:"
+          echo "${{ steps.meta.outputs.tags }}"

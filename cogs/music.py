@@ -19,7 +19,7 @@ logger = logging.getLogger('music')
 
 # Ellen Joe брендинг
 ELLEN_COLOR = 0x5BCEFA  # Голубой Ellen
-ELLEN_AVATAR = "https://i.imgur.com/9qX4r8Y.png"  # Ellen Joe аватар
+ELLEN_AVATAR = "https://preview.redd.it/ellen-joe-fixing-her-hair-by-v0-42mc2jm3elcd1.jpeg?width=1080&crop=smart&auto=webp&s=1a898cd6856ed7bd23c556abd3854d92a2c37ef4"  # Ellen Joe аватар
 ELLEN_BANNER = "https://i.imgur.com/3kZw7xM.png"  # Ellen Joe баннер
 
 
@@ -32,25 +32,32 @@ class QueuePaginator(View):
         self.page = page
 
     def get_queue_embed(self) -> discord.Embed:
-        """Создаёт embed с очередью треков"""
+        """Создаёт ПРЕМИУМ embed с очередью треков"""
         queue = self.cog.get_queue(self.guild_id)
-        current = self.cog.current.get(self.guild_id)
+        track_info = self.cog.current_track_info.get(self.guild_id)
 
-        # Стиль Ellen Joe: минималистичный, чистый
+        # Премиум стиль Ellen Joe
         embed = discord.Embed(
-            title="🎵 Очередь воспроизведения",
-            color=ELLEN_COLOR,
-            description=""
+            title="",
+            description="## 🎵 Очередь воспроизведения",
+            color=ELLEN_COLOR
         )
 
         # Баннер Ellen Joe
-        embed.set_author(name="EllenSings Music Bot", icon_url=ELLEN_AVATAR)
+        embed.set_author(
+            name="EllenSings Music Bot",
+            icon_url="https://i.imgur.com/EllenJoe.png"
+        )
 
         # Текущий трек с деталями
-        if current:
-            duration = str(timedelta(seconds=current.duration)) if current.duration else "Live"
-            current_text = f"**[{current.title}]({current.webpage_url})**\n"
-            current_text += f"👤 {current.uploader} • ⏱️ {duration}"
+        if track_info:
+            duration = str(timedelta(seconds=track_info.duration)) if track_info.duration else "🔴 Live"
+            current_text = f"╔═══════════════════════════════╗\n"
+            current_text += f"║ **[{track_info.title[:45]}]({track_info.webpage_url})**\n"
+            current_text += f"║\n"
+            current_text += f"║ 👤 {track_info.uploader[:40]}\n"
+            current_text += f"║ ⏱️ {duration}\n"
+            current_text += f"╚═══════════════════════════════╝"
 
             embed.add_field(
                 name="▶️ Сейчас играет",
@@ -58,31 +65,35 @@ class QueuePaginator(View):
                 inline=False
             )
 
-            # Thumbnail текущего трека
-            if current.thumbnail:
-                embed.set_thumbnail(url=current.thumbnail)
+            # Большая картинка текущего трека
+            if track_info.thumbnail:
+                embed.set_image(url=track_info.thumbnail)
 
         # Следующие треки с пагинацией
-        items_per_page = 8
+        items_per_page = 6
         start = self.page * items_per_page
         end = start + items_per_page
         page_queue = queue[start:end]
 
         if page_queue:
-            queue_text = ""
+            queue_text = "╔═══════════════════════════════╗\n"
             for i, track in enumerate(page_queue):
-                duration = str(timedelta(seconds=track.duration)) if track.duration else "Live"
-                queue_text += f"`{start + i + 1}.` **{track.title[:50]}**\n"
-                queue_text += f"    ⏱️ {duration} • 👤 {track.uploader[:30]}\n"
+                duration = str(timedelta(seconds=track.duration)) if track.duration else "🔴 Live"
+                queue_text += f"║ `{start + i + 1}.` **{track.title[:40]}**\n"
+                queue_text += f"║     ⏱️ {duration} • 👤 {track.uploader[:25]}\n"
+                if i < len(page_queue) - 1:
+                    queue_text += f"║\n"
+            queue_text += f"╚═══════════════════════════════╝"
+
+            max_page = (len(queue) - 1) // items_per_page + 1 if queue else 1
 
             embed.add_field(
-                name=f"📃 Следующие треки (всего: {len(queue)})",
+                name=f"📃 Следующие треки (Всего: {len(queue)} | Страница {self.page + 1}/{max_page})",
                 value=queue_text,
                 inline=False
             )
-        elif not current:
-            embed.description = "*Очередь пуста. Добавьте треки командой `/play`*"
-            embed.set_image(url=ELLEN_BANNER)
+        elif not track_info:
+            embed.description += "\n\n*Очередь пуста. Добавьте треки командой `/play` или `/search`*"
 
         # Информация внизу
         repeat_mode = self.cog.repeat_mode.get(self.guild_id, 'none')
@@ -90,8 +101,8 @@ class QueuePaginator(View):
         repeat_icons = {'none': '➡️ Выкл', 'track': '🔂 Трек', 'queue': '🔁 Очередь'}
 
         embed.set_footer(
-            text=f"Повтор: {repeat_icons[repeat_mode]} | Shuffle: {shuffle_status} | Страница {self.page + 1}",
-            icon_url=ELLEN_AVATAR
+            text=f"Повтор: {repeat_icons[repeat_mode]} • Shuffle: {shuffle_status}",
+            icon_url="https://i.imgur.com/EllenJoe.png"
         )
 
         return embed
@@ -160,24 +171,35 @@ class SearchResultsView(View):
             )
 
             queue = self.cog.get_queue(self.ctx.guild.id)
+            was_empty = len(queue) == 0 and not self.cog.current.get(self.ctx.guild.id)
             queue.append(player)
-
-            # Embed подтверждения
-            embed = discord.Embed(
-                title="✅ Добавлено в очередь",
-                description=f"**[{player.title}]({player.webpage_url})**",
-                color=ELLEN_COLOR
-            )
-            embed.set_thumbnail(url=player.thumbnail)
-            embed.add_field(name="Позиция", value=f"#{len(queue)}", inline=True)
-            duration = str(timedelta(seconds=player.duration)) if player.duration else "Live"
-            embed.add_field(name="Длительность", value=duration, inline=True)
-            embed.set_footer(text=f"Запросил {interaction.user.display_name}", icon_url=interaction.user.avatar.url if interaction.user.avatar else None)
-
-            await interaction.followup.send(embed=embed)
 
             # Запускаем воспроизведение
             await self.cog.process_queue(self.ctx.guild.id)
+
+            # Если трек начал играть сразу - показываем панель управления
+            if was_empty:
+                await asyncio.sleep(0.5)
+                track_info = self.cog.current_track_info.get(self.ctx.guild.id)
+                if track_info:
+                    await self.cog.update_now_playing(self.ctx.guild.id, channel=self.ctx.channel, force_new=True)
+            else:
+                # Если трек добавлен в очередь - показываем уведомление
+                embed = discord.Embed(
+                    title="✅ Добавлено в очередь",
+                    description=f"**[{player.title}]({player.webpage_url})**",
+                    color=ELLEN_COLOR
+                )
+                embed.set_thumbnail(url=player.thumbnail)
+                embed.add_field(name="Позиция", value=f"#{len(queue)}", inline=True)
+                duration = str(timedelta(seconds=player.duration)) if player.duration else "Live"
+                embed.add_field(name="Длительность", value=duration, inline=True)
+                embed.set_footer(text=f"Запросил {interaction.user.display_name}", icon_url=interaction.user.avatar.url if interaction.user.avatar else None)
+
+                await interaction.followup.send(embed=embed)
+
+                # Обновляем карточку "Сейчас играет"
+                await self.cog.update_now_playing(self.ctx.guild.id)
 
         except Exception as e:
             logger.error(f"Error adding track from search: {e}")
@@ -191,15 +213,88 @@ class MusicControls(View):
         self.cog = cog
         self.guild_id = guild_id
 
-    @discord.ui.button(emoji="⏯️", style=discord.ButtonStyle.primary, custom_id="play_pause", row=0)
-    async def play_pause_btn(self, interaction: discord.Interaction, button: Button):
+        # Определяем стили кнопок в зависимости от состояния
+        repeat_mode = cog.repeat_mode.get(guild_id, 'none')
+        shuffle_active = cog.shuffle_mode.get(guild_id, False)
+
+        # Создаём кнопки динамически с правильными стилями
+        self.add_item(Button(
+            emoji="⏯️",
+            style=discord.ButtonStyle.primary,
+            custom_id=f"play_pause_{guild_id}",
+            row=0
+        ))
+        self.add_item(Button(
+            emoji="⏭️",
+            style=discord.ButtonStyle.secondary,
+            custom_id=f"skip_{guild_id}",
+            row=0
+        ))
+        self.add_item(Button(
+            emoji="⏹️",
+            style=discord.ButtonStyle.danger,
+            custom_id=f"stop_{guild_id}",
+            row=0
+        ))
+        self.add_item(Button(
+            emoji="🔁",
+            style=discord.ButtonStyle.success if repeat_mode != 'none' else discord.ButtonStyle.secondary,
+            label="Repeat" if repeat_mode != 'none' else None,
+            custom_id=f"repeat_{guild_id}",
+            row=0
+        ))
+        self.add_item(Button(
+            emoji="🔀",
+            style=discord.ButtonStyle.success if shuffle_active else discord.ButtonStyle.secondary,
+            label="Shuffle" if shuffle_active else None,
+            custom_id=f"shuffle_{guild_id}",
+            row=0
+        ))
+        self.add_item(Button(
+            emoji="📃",
+            style=discord.ButtonStyle.secondary,
+            custom_id=f"queue_{guild_id}",
+            row=1
+        ))
+        self.add_item(Button(
+            emoji="🔊",
+            style=discord.ButtonStyle.secondary,
+            custom_id=f"volume_up_{guild_id}",
+            row=1
+        ))
+        self.add_item(Button(
+            emoji="🔉",
+            style=discord.ButtonStyle.secondary,
+            custom_id=f"volume_down_{guild_id}",
+            row=1
+        ))
+
+        # Привязываем callbacks
+        for item in self.children:
+            if "play_pause" in item.custom_id:
+                item.callback = self.play_pause_callback
+            elif "skip" in item.custom_id:
+                item.callback = self.skip_callback
+            elif "stop" in item.custom_id:
+                item.callback = self.stop_callback
+            elif "repeat" in item.custom_id:
+                item.callback = self.repeat_callback
+            elif "shuffle" in item.custom_id:
+                item.callback = self.shuffle_callback
+            elif "queue" in item.custom_id:
+                item.callback = self.queue_callback
+            elif "volume_up" in item.custom_id:
+                item.callback = self.volume_up_callback
+            elif "volume_down" in item.custom_id:
+                item.callback = self.volume_down_callback
+
+    async def play_pause_callback(self, interaction: discord.Interaction):
         """Пауза/Возобновление"""
         await self.cog.toggle_play_pause(self.guild_id)
         await interaction.response.defer()
         await self.cog.update_now_playing(self.guild_id)
 
-    @discord.ui.button(emoji="⏭️", style=discord.ButtonStyle.secondary, custom_id="skip", row=0)
-    async def skip_btn(self, interaction: discord.Interaction, button: Button):
+    async def skip_callback(self, interaction: discord.Interaction):
         """Пропуск трека"""
         guild = self.cog.bot.get_guild(self.guild_id)
         if guild and guild.voice_client:
@@ -208,14 +303,12 @@ class MusicControls(View):
         else:
             await interaction.response.send_message("❌ Ничего не играет", ephemeral=True, delete_after=3)
 
-    @discord.ui.button(emoji="⏹️", style=discord.ButtonStyle.danger, custom_id="stop", row=0)
-    async def stop_btn(self, interaction: discord.Interaction, button: Button):
+    async def stop_callback(self, interaction: discord.Interaction):
         """Остановка и очистка"""
         await self.cog.stop_playback(self.guild_id)
         await interaction.response.send_message("⏹️ Воспроизведение остановлено", ephemeral=True, delete_after=3)
 
-    @discord.ui.button(emoji="🔁", style=discord.ButtonStyle.secondary, custom_id="repeat", row=0)
-    async def repeat_btn(self, interaction: discord.Interaction, button: Button):
+    async def repeat_callback(self, interaction: discord.Interaction):
         """Переключение режима повтора"""
         modes = ['none', 'track', 'queue']
         current = self.cog.repeat_mode.get(self.guild_id, 'none')
@@ -230,8 +323,7 @@ class MusicControls(View):
         )
         await self.cog.update_now_playing(self.guild_id)
 
-    @discord.ui.button(emoji="🔀", style=discord.ButtonStyle.secondary, custom_id="shuffle", row=0)
-    async def shuffle_btn(self, interaction: discord.Interaction, button: Button):
+    async def shuffle_callback(self, interaction: discord.Interaction):
         """Перемешать очередь"""
         queue = self.cog.get_queue(self.guild_id)
         if len(queue) < 2:
@@ -249,8 +341,7 @@ class MusicControls(View):
         )
         await self.cog.update_now_playing(self.guild_id)
 
-    @discord.ui.button(emoji="📃", style=discord.ButtonStyle.secondary, custom_id="queue", row=1)
-    async def queue_btn(self, interaction: discord.Interaction, button: Button):
+    async def queue_callback(self, interaction: discord.Interaction):
         """Показать очередь"""
         paginator = QueuePaginator(self.cog, self.guild_id)
         await interaction.response.send_message(
@@ -259,8 +350,7 @@ class MusicControls(View):
             ephemeral=True
         )
 
-    @discord.ui.button(emoji="🔊", style=discord.ButtonStyle.secondary, custom_id="volume_up", row=1)
-    async def volume_up_btn(self, interaction: discord.Interaction, button: Button):
+    async def volume_up_callback(self, interaction: discord.Interaction):
         """Увеличить громкость"""
         current = self.cog.current.get(self.guild_id)
         if current:
@@ -275,8 +365,7 @@ class MusicControls(View):
         else:
             await interaction.response.send_message("❌ Ничего не играет", ephemeral=True, delete_after=3)
 
-    @discord.ui.button(emoji="🔉", style=discord.ButtonStyle.secondary, custom_id="volume_down", row=1)
-    async def volume_down_btn(self, interaction: discord.Interaction, button: Button):
+    async def volume_down_callback(self, interaction: discord.Interaction):
         """Уменьшить громкость"""
         current = self.cog.current.get(self.guild_id)
         if current:
@@ -292,6 +381,18 @@ class MusicControls(View):
             await interaction.response.send_message("❌ Ничего не играет", ephemeral=True, delete_after=3)
 
 
+class TrackInfo:
+    """Класс для хранения информации о треке (для повтора)"""
+    def __init__(self, url: str, title: str, uploader: str, duration: int, thumbnail: str, webpage_url: str, repeat_mode: str = 'none'):
+        self.url = url
+        self.title = title
+        self.uploader = uploader
+        self.duration = duration
+        self.thumbnail = thumbnail
+        self.webpage_url = webpage_url
+        self.repeat_mode_on_start = repeat_mode  # Режим повтора, когда трек начал играть
+
+
 class Music(commands.Cog):
     """Основной музыкальный модуль с улучшенной стабильностью"""
 
@@ -300,6 +401,7 @@ class Music(commands.Cog):
         # Состояние для каждой гильдии
         self.queues: Dict[int, List] = {}
         self.current: Dict[int, discord.PCMVolumeTransformer] = {}
+        self.current_track_info: Dict[int, TrackInfo] = {}  # Информация о текущем треке для повтора
         self.repeat_mode: Dict[int, str] = {}  # 'none', 'track', 'queue'
         self.shuffle_mode: Dict[int, bool] = {}  # Режим shuffle
         self.queue_locks: Dict[int, asyncio.Lock] = {}
@@ -351,6 +453,18 @@ class Music(commands.Cog):
             player = queue.pop(0)
             self.current[guild_id] = player
 
+            # Сохраняем информацию о треке для повтора (включая текущий режим повтора)
+            current_repeat_mode = self.repeat_mode.get(guild_id, 'none')
+            self.current_track_info[guild_id] = TrackInfo(
+                url=player.data.get('url'),
+                title=player.title,
+                uploader=player.uploader,
+                duration=player.duration,
+                thumbnail=player.thumbnail,
+                webpage_url=player.webpage_url,
+                repeat_mode=current_repeat_mode
+            )
+
             # Запускаем воспроизведение
             def after_play(error):
                 if error:
@@ -364,25 +478,51 @@ class Music(commands.Cog):
             voice_client.play(player, after=after_play)
             logger.info(f"Playing: {player.title} in guild {guild_id}")
 
-            # Обновляем панель Now Playing
-            await self.update_now_playing(guild_id)
+            # Обновляем панель Now Playing (создаём новую при смене трека)
+            await self.update_now_playing(guild_id, force_new=True)
 
     async def handle_track_end(self, guild_id: int):
         """
-        Обработка окончания трека с учётом режима повтора
+        Обработка окончания трека с учётом режима повтора.
+        Использует режим повтора, который был активен когда трек НАЧАЛ играть,
+        а не текущий глобальный режим. Это предотвращает неожиданное поведение
+        при изменении режима повтора во время воспроизведения.
         """
-        current_track = self.current.get(guild_id)
+        track_info = self.current_track_info.get(guild_id)
 
-        # Обработка режима повтора
-        if current_track:
-            repeat = self.repeat_mode.get(guild_id, 'none')
+        # Обработка режима повтора (используем режим, который был при старте трека)
+        if track_info:
+            repeat = track_info.repeat_mode_on_start
+            queue = self.get_queue(guild_id)
 
             if repeat == 'track':
-                # Повтор текущего трека - добавляем в начало очереди
-                self.get_queue(guild_id).insert(0, current_track)
+                # Повтор текущего трека - но только если нет других треков в очереди
+                # Это предотвращает блокировку очереди повторяющимся треком
+                if len(queue) == 0:
+                    try:
+                        player = await YTDLSource.from_url(
+                            track_info.webpage_url,
+                            loop=self.bot.loop,
+                            stream=True
+                        )
+                        queue.insert(0, player)
+                        logger.info(f"Track repeat: {track_info.title}")
+                    except Exception as e:
+                        logger.error(f"Failed to repeat track: {e}")
+                else:
+                    logger.info(f"Skipping track repeat because queue has {len(queue)} tracks waiting")
             elif repeat == 'queue':
-                # Повтор очереди - добавляем в конец
-                self.get_queue(guild_id).append(current_track)
+                # Повтор очереди - ПЕРЕСОЗДАЕМ player и добавляем в конец
+                try:
+                    player = await YTDLSource.from_url(
+                        track_info.webpage_url,
+                        loop=self.bot.loop,
+                        stream=True
+                    )
+                    queue.append(player)
+                    logger.info(f"Track added to queue repeat: {track_info.title}")
+                except Exception as e:
+                    logger.error(f"Failed to add track to queue: {e}")
 
         # Обрабатываем следующий трек
         await self.process_queue(guild_id)
@@ -447,10 +587,12 @@ class Music(commands.Cog):
         elif voice_client.is_paused():
             voice_client.resume()
 
-    async def update_now_playing(self, guild_id: int):
-        """Обновляет embed с текущим треком"""
+    async def update_now_playing(self, guild_id: int, channel=None, force_new=False):
+        """Обновляет/создаёт embed с текущим треком"""
+        track_info = self.current_track_info.get(guild_id)
         current = self.current.get(guild_id)
-        if not current:
+
+        if not track_info or not current:
             return
 
         guild = self.bot.get_guild(guild_id)
@@ -461,71 +603,118 @@ class Music(commands.Cog):
         if not voice_client:
             return
 
-        # Создаём embed в стиле Ellen Joe
+        # Создаём ПРЕМИУМ embed в стиле Ellen Joe
         embed = discord.Embed(
-            title="🎧 Сейчас играет",
-            description=f"**[{current.title}]({current.webpage_url})**",
+            title="",
+            description=f"## 🎧 Сейчас играет\n### **[{track_info.title[:60]}]({track_info.webpage_url})**",
             color=ELLEN_COLOR
         )
 
         # Баннер Ellen Joe
-        embed.set_author(name="EllenSings Music Bot", icon_url=ELLEN_AVATAR)
+        embed.set_author(
+            name="EllenSings Music Bot",
+            icon_url=ELLEN_AVATAR
+        )
 
-        # Thumbnail трека
-        if current.thumbnail:
-            embed.set_thumbnail(url=current.thumbnail)
+        # Картинка трека (большая)
+        if track_info.thumbnail:
+            embed.set_image(url=track_info.thumbnail)
 
-        # Информация о треке
-        duration = str(timedelta(seconds=current.duration)) if current.duration else "Live Stream"
-        embed.add_field(name="👤 Автор", value=current.uploader, inline=True)
-        embed.add_field(name="⏱️ Длительность", value=duration, inline=True)
+        # Информация о треке с красивыми разделителями
+        duration = str(timedelta(seconds=track_info.duration)) if track_info.duration else "🔴 Live"
+
+        info_text = f"```\n"
+        info_text += f"╔═══════════════════════════════╗\n"
+        info_text += f"║ 👤 Автор: {track_info.uploader[:24]}\n"
+        info_text += f"║ ⏱️  Длительность: {duration}\n"
 
         # Статус воспроизведения
         if voice_client.is_paused():
-            status = "⏸️ Пауза"
+            status = "⏸️  Пауза"
         elif voice_client.is_playing():
-            status = "▶️ Воспроизведение"
+            status = "▶️  Воспроизведение"
         else:
-            status = "⏹️ Остановлено"
+            status = "⏹️  Остановлено"
 
-        embed.add_field(name="📻 Статус", value=status, inline=True)
+        info_text += f"║ 📻 Статус: {status}\n"
+        info_text += f"╚═══════════════════════════════╝\n"
+        info_text += f"```"
+
+        embed.add_field(name="", value=info_text, inline=False)
 
         # Информация об очереди
         queue_len = len(self.get_queue(guild_id))
         next_track = self.get_queue(guild_id)[0] if queue_len > 0 else None
 
+        queue_text = f"```\n"
+        queue_text += f"╔═══════════════════════════════╗\n"
         if next_track:
-            embed.add_field(
-                name=f"📃 Следующий трек (из {queue_len})",
-                value=f"{next_track.title[:80]}",
-                inline=False
-            )
+            queue_text += f"║ Следующий: {next_track.title[:18]}\n"
+            queue_text += f"║ 📃 Всего: {queue_len} треков\n"
         else:
-            embed.add_field(name="📃 Очередь", value="Больше треков нет", inline=False)
+            queue_text += f"║ Больше треков нет\n"
+        queue_text += f"╚═══════════════════════════════╝\n"
+        queue_text += f"```"
 
-        # Настройки внизу
+        embed.add_field(name="📃 Очередь", value=queue_text, inline=False)
+
+        # Настройки с красивыми иконками и индикаторами
         repeat = self.repeat_mode.get(guild_id, 'none')
         shuffle = self.shuffle_mode.get(guild_id, False)
         volume = int(current.volume * 100)
 
-        repeat_icons = {'none': '➡️ Выкл', 'track': '🔂 Трек', 'queue': '🔁 Очередь'}
-        shuffle_icon = "🔀 Вкл" if shuffle else "➡️ Выкл"
+        repeat_icons = {'none': '⚪ Выкл', 'track': '🟢 Трек', 'queue': '🟢 Очередь'}
+        shuffle_icon = "🟢 Вкл" if shuffle else "⚪ Выкл"
 
-        embed.add_field(name="🔁 Повтор", value=repeat_icons[repeat], inline=True)
-        embed.add_field(name="🔀 Shuffle", value=shuffle_icon, inline=True)
-        embed.add_field(name="🔊 Громкость", value=f"{volume}%", inline=True)
+        settings_text = f"```\n"
+        settings_text += f"╔═══════════════════════════════╗\n"
+        settings_text += f"║ 🔁 Повтор: {repeat_icons[repeat]}\n"
+        settings_text += f"║ 🔀 Shuffle: {shuffle_icon}\n"
+        settings_text += f"║ 🔊 Громкость: {volume}%\n"
+        settings_text += f"╚═══════════════════════════════╝\n"
+        settings_text += f"```"
 
-        embed.set_footer(text="EllenSings • Используйте кнопки для управления", icon_url=ELLEN_AVATAR)
+        embed.add_field(name="⚙️ Настройки", value=settings_text, inline=False)
 
-        # Создаём или обновляем сообщение
+        # Ellen Joe thumbnail в углу
+        embed.set_thumbnail(url=ELLEN_AVATAR)
+
+        embed.set_footer(
+            text="EllenSings • Premium Music Bot • Используйте кнопки для управления",
+            icon_url=ELLEN_AVATAR
+        )
+
+        # Обновляем View с актуальным состоянием кнопок
         view = MusicControls(self, guild_id)
 
-        if guild_id in self.now_playing_messages:
+        # РЕДАКТИРУЕМ существующее сообщение или создаём новое
+        if guild_id in self.now_playing_messages and not force_new:
             try:
                 await self.now_playing_messages[guild_id].edit(embed=embed, view=view)
+                return
             except (discord.NotFound, discord.HTTPException):
-                # Сообщение удалено, создаём новое
                 del self.now_playing_messages[guild_id]
+
+        # Создаём новое сообщение (если старого нет или force_new=True)
+        if channel is None:
+            # Находим канал из старого сообщения
+            old_msg = self.now_playing_messages.get(guild_id)
+            if old_msg:
+                channel = old_msg.channel
+                # Удаляем старое сообщение
+                try:
+                    await old_msg.delete()
+                except:
+                    pass
+            else:
+                channel = guild.text_channels[0] if guild.text_channels else None
+
+        if channel:
+            try:
+                message = await channel.send(embed=embed, view=view)
+                self.now_playing_messages[guild_id] = message
+            except discord.HTTPException as e:
+                logger.error(f"Failed to send now playing message: {e}")
 
     # ========== КОМАНДЫ ==========
 
@@ -570,56 +759,40 @@ class Music(commands.Cog):
             was_empty = len(queue) == 0 and not self.current.get(ctx.guild.id)
             queue.append(player)
 
-            # Создаём красивый embed подтверждения
-            embed = discord.Embed(
-                title="✅ Добавлено в очередь",
-                description=f"**[{player.title}]({player.webpage_url})**",
-                color=ELLEN_COLOR
-            )
-
-            embed.set_author(name="EllenSings Music Bot", icon_url=ELLEN_AVATAR)
-            embed.set_thumbnail(url=player.thumbnail)
-
-            # Детали трека
-            duration = str(timedelta(seconds=player.duration)) if player.duration else "Live"
-            embed.add_field(name="👤 Автор", value=player.uploader, inline=True)
-            embed.add_field(name="⏱️ Длительность", value=duration, inline=True)
-            embed.add_field(name="📍 Позиция", value=f"#{len(queue)}", inline=True)
-
-            user_avatar = ctx.author.avatar.url if ctx.author.avatar else None
-            embed.set_footer(text=f"Запросил {ctx.author.display_name}", icon_url=user_avatar)
-
-            await ctx.send(embed=embed)
-
-            # Запускаем обработку очереди
+            # Запускаем обработку очереди СРАЗУ
             await self.process_queue(ctx.guild.id)
 
-            # АВТОМАТИЧЕСКИ показываем панель управления если трек начал играться
+            # Если трек начал играть сразу - показываем только панель управления
             if was_empty:
-                await asyncio.sleep(1)  # Даём время начать воспроизведение
-                current = self.current.get(ctx.guild.id)
-                if current:
-                    # Создаём панель управления
-                    control_embed = discord.Embed(
-                        title="🎧 Сейчас играет",
-                        description=f"**[{current.title}]({current.webpage_url})**",
-                        color=ELLEN_COLOR
-                    )
-                    control_embed.set_author(name="EllenSings Music Bot", icon_url=ELLEN_AVATAR)
-                    control_embed.set_thumbnail(url=current.thumbnail)
+                await asyncio.sleep(0.5)  # Даём время начать воспроизведение
+                track_info = self.current_track_info.get(ctx.guild.id)
+                if track_info:
+                    # Показываем панель управления вместо сообщения "добавлено"
+                    await self.update_now_playing(ctx.guild.id, channel=ctx.channel, force_new=True)
+            else:
+                # Если трек добавлен в очередь (не играет сразу) - показываем уведомление
+                embed = discord.Embed(
+                    title="✅ Добавлено в очередь",
+                    description=f"**[{player.title}]({player.webpage_url})**",
+                    color=ELLEN_COLOR
+                )
 
-                    duration_str = str(timedelta(seconds=current.duration)) if current.duration else "Live"
-                    control_embed.add_field(name="👤 Автор", value=current.uploader, inline=True)
-                    control_embed.add_field(name="⏱️ Длительность", value=duration_str, inline=True)
-                    control_embed.add_field(name="📻 Статус", value="▶️ Воспроизведение", inline=True)
+                embed.set_author(name="EllenSings Music Bot", icon_url=ELLEN_AVATAR)
+                embed.set_thumbnail(url=player.thumbnail)
 
-                    volume = int(current.volume * 100)
-                    control_embed.add_field(name="🔊 Громкость", value=f"{volume}%", inline=True)
-                    control_embed.set_footer(text="Используйте кнопки для управления", icon_url=ELLEN_AVATAR)
+                # Детали трека
+                duration = str(timedelta(seconds=player.duration)) if player.duration else "Live"
+                embed.add_field(name="👤 Автор", value=player.uploader, inline=True)
+                embed.add_field(name="⏱️ Длительность", value=duration, inline=True)
+                embed.add_field(name="📍 Позиция", value=f"#{len(queue)}", inline=True)
 
-                    view = MusicControls(self, ctx.guild.id)
-                    control_msg = await ctx.channel.send(embed=control_embed, view=view)
-                    self.now_playing_messages[ctx.guild.id] = control_msg
+                user_avatar = ctx.author.avatar.url if ctx.author.avatar else None
+                embed.set_footer(text=f"Запросил {ctx.author.display_name}", icon_url=user_avatar)
+
+                await ctx.send(embed=embed)
+
+                # Обновляем существующую карточку "Сейчас играет" с новым количеством треков
+                await self.update_now_playing(ctx.guild.id)
 
         except Exception as e:
             logger.error(f"Error loading track: {e}")
@@ -717,46 +890,18 @@ class Music(commands.Cog):
     @app_commands.describe()
     async def nowplaying(self, ctx: commands.Context):
         """Показать текущий трек с панелью управления"""
-        current = self.current.get(ctx.guild.id)
+        track_info = self.current_track_info.get(ctx.guild.id)
 
-        if not current:
+        if not track_info:
             embed = discord.Embed(
                 title="❌ Ничего не играет",
+                description="Добавьте треки командой `/play` или `/search`",
                 color=0xFF6B6B
             )
             return await ctx.send(embed=embed, ephemeral=True)
 
-        voice_client = ctx.voice_client
-
-        embed = discord.Embed(
-            title="🎧 Сейчас играет",
-            description=f"**{current.title}**",
-            color=0x5BCEFA
-        )
-
-        if voice_client:
-            if voice_client.is_paused():
-                status = "⏸️ Пауза"
-            elif voice_client.is_playing():
-                status = "▶️ Воспроизведение"
-            else:
-                status = "⏹️ Остановлено"
-            embed.add_field(name="Статус", value=status, inline=True)
-
-        queue_len = len(self.get_queue(ctx.guild.id))
-        embed.add_field(name="В очереди", value=f"{queue_len} треков", inline=True)
-
-        repeat = self.repeat_mode.get(ctx.guild.id, 'none')
-        repeat_icons = {'none': '➡️', 'track': '🔂', 'queue': '🔁'}
-        embed.add_field(name="Режим", value=f"{repeat_icons[repeat]} {repeat}", inline=True)
-
-        embed.set_footer(text="EllenSings • Музыкальный сервис")
-
-        view = MusicControls(self, ctx.guild.id)
-        message = await ctx.send(embed=embed, view=view)
-
-        # Сохраняем сообщение для обновлений
-        self.now_playing_messages[ctx.guild.id] = message
+        # Используем update_now_playing для создания панели
+        await self.update_now_playing(ctx.guild.id, channel=ctx.channel)
 
     @commands.hybrid_command(name="clear", description="Очистить очередь")
     async def clear(self, ctx: commands.Context):
@@ -966,51 +1111,91 @@ class Music(commands.Cog):
                 )
                 return await ctx.send(embed=embed)
 
-            # Уведомление о загрузке
-            loading_embed = discord.Embed(
-                title="⏳ Загрузка плейлиста...",
-                description=f"Найдено **{len(entries)}** треков\nЗагрузка может занять некоторое время...",
-                color=ELLEN_COLOR
-            )
-            loading_embed.set_author(name="EllenSings Music Bot", icon_url=ELLEN_AVATAR)
-            loading_msg = await ctx.send(embed=loading_embed)
-
-            # Загружаем треки
             queue = self.get_queue(ctx.guild.id)
-            added = 0
+            was_empty = len(queue) == 0 and not self.current.get(ctx.guild.id)
+            total = min(len(entries), 50)
 
-            for i, entry in enumerate(entries[:50]):  # Лимит 50 треков
-                try:
-                    player = await YTDLSource.from_url(
-                        entry.get('url') or entry.get('webpage_url'),
-                        loop=self.bot.loop,
-                        stream=True
-                    )
-                    queue.append(player)
-                    added += 1
+            # ЗАГРУЖАЕМ ПЕРВЫЙ ТРЕК СРАЗУ И НАЧИНАЕМ ИГРАТЬ
+            try:
+                first_player = await YTDLSource.from_url(
+                    entries[0].get('url') or entries[0].get('webpage_url'),
+                    loop=self.bot.loop,
+                    stream=True
+                )
+                queue.append(first_player)
 
-                    # Обновляем прогресс каждые 5 треков
-                    if (i + 1) % 5 == 0:
-                        loading_embed.description = f"Загружено {added}/{len(entries[:50])} треков..."
-                        await loading_msg.edit(embed=loading_embed)
+                # Запускаем воспроизведение первого трека
+                await self.process_queue(ctx.guild.id)
 
-                except Exception as e:
-                    logger.warning(f"Failed to load track from playlist: {e}")
-                    continue
+                # Показываем панель управления сразу
+                if was_empty:
+                    await asyncio.sleep(0.5)
+                    await self.update_now_playing(ctx.guild.id, channel=ctx.channel, force_new=True)
 
-            # Финальное уведомление
-            success_embed = discord.Embed(
-                title="✅ Плейлист добавлен",
-                description=f"**{added}** треков добавлено в очередь из плейлиста",
-                color=ELLEN_COLOR
-            )
-            success_embed.set_author(name="EllenSings Music Bot", icon_url=ELLEN_AVATAR)
-            success_embed.set_footer(text=f"Запросил {ctx.author.display_name}")
+                added = 1
+            except Exception as e:
+                logger.error(f"Failed to load first track: {e}")
+                embed = discord.Embed(
+                    title="❌ Ошибка",
+                    description=f"Не удалось загрузить первый трек плейлиста: {str(e)}",
+                    color=0xFF6B6B
+                )
+                return await ctx.send(embed=embed)
 
-            await loading_msg.edit(embed=success_embed)
+            # Уведомление о фоновой загрузке остальных треков
+            if total > 1:
+                loading_embed = discord.Embed(
+                    title="⏳ Загрузка плейлиста в фоне...",
+                    description=f"Первый трек начал играть!\nОстальные **{total - 1}** треков загружаются...",
+                    color=ELLEN_COLOR
+                )
+                loading_embed.set_author(name="EllenSings Music Bot", icon_url=ELLEN_AVATAR)
+                loading_msg = await ctx.send(embed=loading_embed)
 
-            # Запускаем воспроизведение
-            await self.process_queue(ctx.guild.id)
+                # ЗАГРУЖАЕМ ОСТАЛЬНЫЕ ТРЕКИ В ФОНЕ
+                for i, entry in enumerate(entries[1:total], start=1):  # Пропускаем первый
+                    try:
+                        player = await YTDLSource.from_url(
+                            entry.get('url') or entry.get('webpage_url'),
+                            loop=self.bot.loop,
+                            stream=True
+                        )
+                        queue.append(player)
+                        added += 1
+
+                        # Обновляем прогресс каждые 3 трека
+                        if (i + 1) % 3 == 0 or i == total - 1:
+                            progress = (added / total) * 100
+                            filled = int(progress / 5)
+                            empty = 20 - filled
+                            progress_bar = f"{'▓' * filled}{'░' * empty}"
+
+                            loading_embed.description = (
+                                f"╔═══════════════════════════════╗\n"
+                                f"║ Загрузка плейлиста...\n"
+                                f"║\n"
+                                f"║ {progress_bar}\n"
+                                f"║ **{added}/{total}** треков ({int(progress)}%)\n"
+                                f"╚═══════════════════════════════╝"
+                            )
+                            await loading_msg.edit(embed=loading_embed)
+
+                    except Exception as e:
+                        logger.warning(f"Failed to load track from playlist: {e}")
+                        continue
+
+                # Финальное уведомление
+                success_embed = discord.Embed(
+                    title="",
+                    description=f"## ✅ Плейлист загружен\n╔═══════════════════════════════╗\n║ **{added}** треков в очереди\n╚═══════════════════════════════╝",
+                    color=ELLEN_COLOR
+                )
+                success_embed.set_author(name="EllenSings Music Bot", icon_url=ELLEN_AVATAR)
+                success_embed.set_footer(
+                    text=f"Запросил {ctx.author.display_name}",
+                    icon_url=ctx.author.avatar.url if ctx.author.avatar else None
+                )
+                await loading_msg.edit(embed=success_embed)
 
         except Exception as e:
             logger.error(f"Error loading playlist: {e}")
