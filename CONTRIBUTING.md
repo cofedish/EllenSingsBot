@@ -3,6 +3,9 @@
 EllenSings — маленький pet-проект, но любые улучшения приветствуются.
 Ниже короткие правила, чтобы PR проходили быстрее.
 
+Все issues и обсуждения:
+https://github.com/cofedish/EllenSingsBot/issues
+
 ## Багрепорты
 
 Перед созданием issue:
