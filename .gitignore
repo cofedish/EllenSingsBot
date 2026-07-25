@@ -1,6 +1,17 @@
-# Environment variables - ВАЖНО!
+# Секреты — НИКОГДА не коммитить!
 .env
+.env.*
+!.env.example
+*.secret
+secrets/
+
+# Cookies (yt-dlp / браузерные)
+cookies.txt
+*cookies*.txt
+
+# Claude
 .claude/
+
 # Python
 __pycache__/
 *.py[cod]
@@ -25,6 +36,8 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+.ruff_cache/
+.pytest_cache/
 
 # IDE
 .vscode/
@@ -34,14 +47,16 @@ wheels/
 *~
 .DS_Store
 
-# Logs
+# Логи
 *.log
 logs/
 
-# Docker
-.dockerignore
+# Бинарники и архивы (tun2socks собирается в Docker из исходников)
+tun2socks
+*.tar
+*.tar.gz
 
-# Downloaded music files
+# Скачанные аудиофайлы и временные файлы загрузки
 *.mp3
 *.mp4
 *.webm
@@ -49,8 +64,9 @@ logs/
 *.opus
 youtube-*/
 *.part
+*.ytdl
 
-# Temporary files
+# Временные файлы
 *.tmp
 tmp/
 temp/

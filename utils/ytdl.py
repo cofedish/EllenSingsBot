@@ -1,12 +1,18 @@
 """
-YTDL обёртка с поддержкой прокси
-Использует yt-dlp для загрузки аудио из YouTube и других источников
+Обёртка над yt-dlp.
+
+Прокси настраивается на уровне сети (gateway-контейнер с tun2socks),
+поэтому здесь нет никакой прокси-конфигурации и подмены сертификатов:
+TLS-проверка включена, заголовками управляет сам yt-dlp.
 """
+import asyncio
+import logging
+import os
+import tempfile
+from urllib.parse import urlparse
+
 import discord
 import yt_dlp
-import asyncio
-import os
-import logging
 
 logger = logging.getLogger('ytdl')
 
@@ -16,58 +22,49 @@ ffmpeg_options = {
     'options': '-vn -sn -dn -ignore_unknown -loglevel warning'
 }
 
+ALLOWED_URL_SCHEMES = {'http', 'https'}
 
-def get_ytdl_options():
-    """
-    Создаёт опции для yt-dlp
 
-    ВАЖНО: При использовании tun2socks прокси настраивается на уровне сети,
-    а не в приложении. yt-dlp будет автоматически использовать TUN интерфейс.
+def validate_query(query: str) -> str:
     """
-    # Базовые опции
-    options = {
+    Пропускает только http(s)-ссылки или обычный поисковый текст.
+
+    Блокирует схемы вроде file://, ftp:// и т.п., которые пользователь
+    может подсунуть в /play.
+    """
+    query = query.strip()
+    if '://' in query:
+        scheme = urlparse(query).scheme.lower()
+        if scheme not in ALLOWED_URL_SCHEMES:
+            raise ValueError('Поддерживаются только http/https ссылки')
+    return query
+
+
+def _base_options() -> dict:
+    return {
         'format': 'bestaudio/best',
-        'outtmpl': '%(extractor)s-%(id)s-%(title)s.%(ext)s',
+        'outtmpl': os.path.join(tempfile.gettempdir(), '%(extractor)s-%(id)s.%(ext)s'),
         'restrictfilenames': True,
-        'noplaylist': False,  # Разрешаем плейлисты
-        'nocheckcertificate': True,
         'ignoreerrors': False,
         'logtostderr': False,
         'quiet': True,
         'no_warnings': True,
         'default_search': 'ytsearch',
-        'source_address': '0.0.0.0',
         'socket_timeout': 60,
         'extractor_retries': 3,
-        'extract_flat': False,  # Извлекаем полную информацию
-        'http_headers': {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.5',
-            'Accept-Encoding': 'gzip, deflate',
-            'DNT': '1',
-            'Connection': 'keep-alive',
-            'Upgrade-Insecure-Requests': '1'
-        }
+        'cachedir': False,  # контейнер запускается read-only
     }
 
-    # tun2socks прозрачно проксирует весь трафик - настройка прокси не нужна
-    # Проверяем для информации
-    if os.getenv('SOCKS_PROXY'):
-        logger.info("yt-dlp will use transparent proxy via tun2socks")
 
-    return options
+# Экземпляр для одиночных треков и поиска: URL "видео+плейлист" не тянет весь плейлист
+ytdl = yt_dlp.YoutubeDL({**_base_options(), 'noplaylist': True})
 
-
-# Создаём глобальный экземпляр с текущими опциями
-ytdl = yt_dlp.YoutubeDL(get_ytdl_options())
+# Экземпляр для команды /playlist: плейлисты разрешены
+ytdl_playlist = yt_dlp.YoutubeDL({**_base_options(), 'noplaylist': False})
 
 
 class YTDLSource(discord.PCMVolumeTransformer):
-    """
-    Источник аудио из YouTube/других платформ
-    Поддерживает стриминг и прокси
-    """
+    """Источник аудио из YouTube/других платформ (стриминг через ffmpeg)"""
 
     def __init__(self, source, *, data, volume=0.5):
         super().__init__(source, volume)
@@ -82,44 +79,41 @@ class YTDLSource(discord.PCMVolumeTransformer):
     @classmethod
     async def from_url(cls, url, *, loop=None, stream=True):
         """
-        Загружает трек по URL или поисковому запросу
+        Загружает трек по URL или поисковому запросу.
 
         Args:
-            url: URL или поисковый запрос
+            url: URL (http/https) или поисковый запрос
             loop: Event loop (опционально)
             stream: Стриминг (True) или скачивание (False)
 
         Returns:
             YTDLSource: Готовый источник аудио
         """
-        loop = loop or asyncio.get_event_loop()
+        loop = loop or asyncio.get_running_loop()
+        url = validate_query(url)
 
         try:
-            # Извлекаем информацию о треке
             data = await loop.run_in_executor(
                 None,
                 lambda: ytdl.extract_info(url, download=not stream)
             )
 
             if data is None:
-                raise Exception("Не удалось найти трек")
+                raise ValueError("Не удалось найти трек")
 
-            # Если это плейлист - берём первый трек
+            # Если это результат поиска/плейлист — берём первый доступный трек
             if 'entries' in data:
-                # Берём первый доступный трек
                 data = next((entry for entry in data['entries'] if entry), None)
                 if data is None:
-                    raise Exception("Плейлист пуст или недоступен")
+                    raise ValueError("Ничего не найдено")
 
-            # URL для стриминга или имя файла
-            if stream:
-                filename = data['url']
-            else:
-                filename = ytdl.prepare_filename(data)
+            filename = data['url'] if stream else ytdl.prepare_filename(data)
 
-            logger.info(f"Loaded track: {data.get('title', 'Unknown')} from {data.get('extractor', 'unknown')}")
+            logger.info(
+                "Loaded track: %s from %s",
+                data.get('title', 'Unknown'), data.get('extractor', 'unknown')
+            )
 
-            # Создаём FFmpeg источник
             return cls(
                 discord.FFmpegPCMAudio(filename, **ffmpeg_options),
                 data=data
@@ -127,23 +121,26 @@ class YTDLSource(discord.PCMVolumeTransformer):
 
         except yt_dlp.DownloadError as e:
             error_msg = str(e)
-            logger.error(f"yt-dlp download error: {error_msg}")
+            logger.error("yt-dlp download error: %s", error_msg)
 
             # Более дружелюбные сообщения об ошибках
             if "Video unavailable" in error_msg:
-                raise Exception("Видео недоступно или удалено")
+                raise ValueError("Видео недоступно или удалено") from e
             elif "Private video" in error_msg:
-                raise Exception("Это приватное видео")
+                raise ValueError("Это приватное видео") from e
             elif "Sign in" in error_msg:
-                raise Exception("Требуется вход в аккаунт (недоступно)")
+                raise ValueError("Требуется вход в аккаунт (недоступно)") from e
             elif "not available" in error_msg:
-                raise Exception("Контент недоступен в вашем регионе")
+                raise ValueError("Контент недоступен в вашем регионе") from e
             else:
-                raise Exception(f"Ошибка загрузки: {error_msg}")
+                raise ValueError("Не удалось загрузить трек") from e
+
+        except ValueError:
+            raise
 
         except Exception as e:
-            logger.error(f"Unexpected error in YTDLSource: {e}")
-            raise Exception(f"Не удалось загрузить трек: {str(e)}")
+            logger.error("Unexpected error in YTDLSource: %s", e)
+            raise ValueError("Не удалось загрузить трек") from e
 
     def __str__(self):
         return f"{self.title} ({self.uploader})"

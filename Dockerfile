@@ -1,52 +1,50 @@
+# syntax=docker/dockerfile:1
+# ============================================================
+# EllenSings bot — multi-stage build, непривилегированный запуск.
+# Сетевых привилегий у этого образа нет: прокси-маршрутизацию
+# делает отдельный gateway-контейнер (см. gateway/).
+# ============================================================
+
+FROM python:3.11-slim-bookworm AS builder
+
+WORKDIR /build
+COPY requirements.txt .
+RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
+
+# ---------- runtime ----------
 FROM python:3.11-slim-bookworm
 
-# Метаданные
-LABEL maintainer="EllenSings Bot"
-LABEL description="Discord music bot with proxy support"
+LABEL org.opencontainers.image.title="EllenSings Bot"
+LABEL org.opencontainers.image.description="Discord music bot (unprivileged; proxy handled by gateway container)"
 
-# Установка системных зависимостей
-# ffmpeg - для аудио обработки
-# libopus/libsodium - для Discord voice
-# iproute2/curl - для healthcheck и диагностики
+# ffmpeg — декодирование/стриминг аудио
+# libopus0 — кодек Discord Voice (загружается discord.py через ctypes)
+# hadolint ignore=DL3008
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
-    libavcodec-dev \
-    libavformat-dev \
-    libswresample-dev \
-    netcat-openbsd \
-    libopus-dev \
-    libsodium-dev \
-    libgirepository1.0-dev \
-    libcairo2-dev \
-    iproute2 \
-    curl \
+    libopus0 \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
-    && apt-get clean
+    && useradd --system --uid 10001 --no-create-home --shell /usr/sbin/nologin bot
 
-# Создаём непривилегированного пользователя
-RUN useradd -m -u 1000 -s /bin/bash botuser
+COPY --from=builder /install /usr/local
 
 WORKDIR /app
+COPY bot.py healthcheck.py ./
+COPY cogs/ cogs/
+COPY utils/ utils/
 
-# Копируем зависимости и устанавливаем
-COPY --chown=botuser:botuser requirements.txt .
-RUN pip install --no-cache-dir --upgrade pip wheel \
-    && pip install --no-cache-dir -r requirements.txt
+# Контейнер запускается с read_only rootfs; писать можно только в /tmp (tmpfs)
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    HOME=/tmp \
+    HEALTH_FILE=/tmp/ellensings-health
 
-# Копируем исходный код
-COPY --chown=botuser:botuser . .
+USER bot
 
-# Делаем start.sh исполняемым
-RUN chmod +x start.sh tun2socks
+# Настоящая проверка живости: свежесть heartbeat-файла, который бот
+# обновляет только пока WebSocket-соединение с Discord (через прокси) живо
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD ["python", "/app/healthcheck.py"]
 
-# ВАЖНО: НЕ переключаемся на botuser!
-# tun2socks требует root для создания TUN интерфейса
-# Остаёмся root для работы с сетевыми интерфейсами
-
-# Health check - проверяем, что процесс бота запущен
-HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-    CMD pgrep -f "python.*bot.py" > /dev/null || exit 1
-
-# Запуск через start.sh (с tun2socks для прозрачного прокси)
-CMD ["./start.sh"]
+ENTRYPOINT ["python", "-u", "bot.py"]

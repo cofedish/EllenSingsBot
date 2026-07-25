@@ -1,0 +1,17 @@
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+# База (E4/E7/E9/F) + bugbear
+extend-select = ["B"]
+ignore = [
+    "F541",   # f-строки без плейсхолдеров — оставлены для единообразия UI-текстов
+    "BLE001", # catch Exception на границах команд — намеренно: бот не должен падать из-за одной команды
+]
+
+[tool.bandit]
+exclude_dirs = [".venv", "venv"]
+skips = [
+    "B311",  # random.shuffle для очереди треков — не криптографический контекст
+]

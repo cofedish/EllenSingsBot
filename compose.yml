@@ -1,46 +1,124 @@
+# ============================================================
+# EllenSings: два контейнера
+#
+#   gateway — tun2socks + kill-switch. Единственный контейнер
+#             с NET_ADMIN и доступом к /dev/net/tun.
+#   bot     — Discord-бот. Непривилегированный, без capabilities,
+#             read-only rootfs. Живёт в network namespace шлюза
+#             (network_mode: service:gateway), поэтому весь его
+#             трафик проходит через туннель и kill-switch.
+#
+# Требование к хосту: modprobe tun (модуль обычно загружен).
+# Требование к прокси: SOCKS5 с поддержкой UDP ASSOCIATE,
+# иначе Discord Voice (UDP) не заработает — healthcheck шлюза
+# это выявит (DNS через туннель идёт по UDP).
+# ============================================================
+
 services:
-  discord-bot:
-    build: .
-    container_name: ellensings-bot
+  gateway:
+    build: ./gateway
+    image: ${GATEWAY_IMAGE:-ellensings-gateway:latest}
+    container_name: ellensings-gateway
     restart: unless-stopped
 
-    # NET_ADMIN нужен для tun2socks (создание TUN интерфейса)
+    # Единственная привилегия — NET_ADMIN (TUN, маршруты, iptables)
+    cap_drop:
+      - ALL
     cap_add:
       - NET_ADMIN
-
-    # Доступ к TUN устройству для tun2socks
     devices:
       - /dev/net/tun:/dev/net/tun
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      # /run — конфиг tun2socks и xtables.lock
+      - /run:rw,noexec,nosuid,size=8m
+      - /tmp:rw,noexec,nosuid,size=8m
 
-    # Доступ к хосту для подключения к signbox
+    environment:
+      - TZ=${TZ:-Europe/Moscow}
+      # Прокси задаётся в .env; URL с кредами в логи не попадает
+      - PROXY_URL=${PROXY_URL:?PROXY_URL is required, e.g. socks5://host.docker.internal:2080}
+
+    # DNS: entrypoint переписывает /etc/resolv.conf на публичный резолвер
+    # (по умолчанию 1.1.1.1/1.0.0.1, настраивается через DNS_SERVERS),
+    # чтобы запросы шли через туннель, а не через DNS хоста.
+    # Опция `dns:` compose здесь не помогла бы: embedded DNS Docker
+    # форвардит запросы с хоста — это утечка мимо прокси.
+
+    # host.docker.internal -> IP хоста (для прокси, запущенного на хосте)
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
-    # Переменные окружения
-    environment:
-      - TZ=Europe/Moscow
-      - DISCORD_TOKEN=${DISCORD_TOKEN}
-      # SOCKS proxy для tun2socks (весь трафик TCP+UDP)
-      # host.docker.internal указывает на хост из контейнера
-      - SOCKS_PROXY=${PROXY_URL}
+    # IPv6 отключаем: TUN-маршрут обслуживает только IPv4,
+    # IPv6 мог бы стать каналом утечки мимо прокси
+    sysctls:
+      - net.ipv6.conf.all.disable_ipv6=1
 
-    # Volumes
-    volumes:
-      - ./sounds:/app/sounds:ro
-      # .env файл пробрасываем для удобства разработки
-      - ./.env:/app/.env:ro
+    networks:
+      - bot-net
 
-    # Логирование
+    mem_limit: 256m
+    cpus: 0.5
+    pids_limit: 64
+    stop_grace_period: 15s
+
     logging:
       driver: "json-file"
       options:
         max-size: "10m"
         max-file: "3"
 
-    # Health check
-    healthcheck:
-      test: ["CMD", "pgrep", "-f", "python.*bot.py"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
+  bot:
+    build: .
+    image: ${BOT_IMAGE:-ellensings-bot:latest}
+    container_name: ellensings-bot
+    restart: unless-stopped
+
+    # Бот стартует только когда туннель реально работает.
+    # restart: true — при перезапуске шлюза (новый netns) бот перезапускается тоже.
+    depends_on:
+      gateway:
+        condition: service_healthy
+        restart: true
+
+    # Общий network namespace со шлюзом: весь трафик — через туннель
+    network_mode: "service:gateway"
+
+    # Никаких привилегий и записи на диск
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      # heartbeat-файл, HOME и временные файлы yt-dlp/ffmpeg
+      - /tmp:rw,noexec,nosuid,size=128m
+
+    environment:
+      - TZ=${TZ:-Europe/Moscow}
+      # Токен подставляется из .env (не коммитить!). Для продакшена используй
+      # отдельный токен и/или Docker secrets: бот понимает DISCORD_TOKEN_FILE
+      # (путь к файлу с токеном, например /run/secrets/discord_token).
+      - DISCORD_TOKEN=${DISCORD_TOKEN:?DISCORD_TOKEN is required}
+
+    mem_limit: 512m
+    cpus: 1.0
+    pids_limit: 128
+    stop_grace_period: 30s
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+# Изолированная сеть только для шлюза (бот живёт в его namespace)
+networks:
+  bot-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.16.0/28
+          gateway: 172.28.16.1

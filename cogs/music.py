@@ -3,17 +3,17 @@ Music Cog для Discord бота EllenSings
 Управление музыкальной очередью, воспроизведением и UI
 🎵 Ellen Joe Theme - минималистичный, стильный дизайн
 """
+import asyncio
+import logging
+import random
+from datetime import timedelta
+
 import discord
 from discord import app_commands
 from discord.ext import commands
-import asyncio
-import random
-import os
-from typing import Optional, Dict, List
-from utils.ytdl import YTDLSource
-from discord.ui import View, Button, Select
-import logging
-from datetime import timedelta
+from discord.ui import Button, Select, View
+
+from utils.ytdl import YTDLSource, validate_query, ytdl, ytdl_playlist
 
 logger = logging.getLogger('music')
 
@@ -21,6 +21,38 @@ logger = logging.getLogger('music')
 ELLEN_COLOR = 0x5BCEFA  # Голубой Ellen
 ELLEN_AVATAR = "https://preview.redd.it/ellen-joe-fixing-her-hair-by-v0-42mc2jm3elcd1.jpeg?width=1080&crop=smart&auto=webp&s=1a898cd6856ed7bd23c556abd3854d92a2c37ef4"  # Ellen Joe аватар
 ELLEN_BANNER = "https://i.imgur.com/3kZw7xM.png"  # Ellen Joe баннер
+
+
+def same_voice_channel():
+    """Check: команды управления доступны только из voice-канала, где сидит бот"""
+    async def predicate(ctx: commands.Context) -> bool:
+        vc = ctx.guild.voice_client if ctx.guild else None
+        if not vc or not vc.is_connected():
+            raise commands.CheckFailure('Бот сейчас не в голосовом канале')
+        author_voice = getattr(ctx.author, 'voice', None)
+        if not author_voice or author_voice.channel != vc.channel:
+            raise commands.CheckFailure(
+                'Управлять воспроизведением могут только участники голосового канала бота'
+            )
+        return True
+    return commands.check(predicate)
+
+
+def member_can_control(interaction: discord.Interaction) -> bool:
+    """Проверка для кнопок: пользователь находится в том же voice-канале, что и бот"""
+    guild = interaction.guild
+    vc = guild.voice_client if guild else None
+    member_voice = getattr(interaction.user, 'voice', None)
+    return bool(vc and vc.is_connected() and member_voice and member_voice.channel == vc.channel)
+
+
+async def deny_control(interaction: discord.Interaction):
+    """Ответ пользователю, которому недоступно управление"""
+    await interaction.response.send_message(
+        '❌ Управлять могут только участники голосового канала бота',
+        ephemeral=True,
+        delete_after=5
+    )
 
 
 class QueuePaginator(View):
@@ -118,7 +150,8 @@ class QueuePaginator(View):
     @discord.ui.button(label="▶️", style=discord.ButtonStyle.grey)
     async def next_page(self, interaction: discord.Interaction, button: Button):
         queue = self.cog.get_queue(self.guild_id)
-        max_page = (len(queue) - 1) // 10
+        items_per_page = 6
+        max_page = (len(queue) - 1) // items_per_page if queue else 0
         if self.page < max_page:
             self.page += 1
             await interaction.response.edit_message(embed=self.get_queue_embed(), view=self)
@@ -128,7 +161,7 @@ class QueuePaginator(View):
 
 class SearchResultsView(View):
     """Интерфейс выбора из результатов поиска"""
-    def __init__(self, cog, ctx, results: List[dict]):
+    def __init__(self, cog, ctx, results: list[dict]):
         super().__init__(timeout=60)
         self.cog = cog
         self.ctx = ctx
@@ -157,6 +190,9 @@ class SearchResultsView(View):
 
     async def select_callback(self, interaction: discord.Interaction):
         """Обработка выбора трека"""
+        if not member_can_control(interaction):
+            return await deny_control(interaction)
+
         selected_idx = int(self.select.values[0])
         selected = self.results[selected_idx]
 
@@ -203,13 +239,16 @@ class SearchResultsView(View):
 
         except Exception as e:
             logger.error(f"Error adding track from search: {e}")
-            await interaction.followup.send(f"❌ Ошибка: {str(e)}", ephemeral=True)
+            await interaction.followup.send(f"❌ Ошибка: {e!s}", ephemeral=True)
 
 
 class MusicControls(View):
     """Кнопки управления воспроизведением в стиле Ellen Joe"""
     def __init__(self, cog, guild_id: int):
-        super().__init__(timeout=None)
+        # timeout=None создаёт persistent view, но тогда кнопки надо регистрировать
+        # через bot.add_view() после перезапуска — иначе "Interaction failed".
+        # Ставим 600 сек: если бот перезапустится, старые сообщения просто протухнут.
+        super().__init__(timeout=600)
         self.cog = cog
         self.guild_id = guild_id
 
@@ -290,12 +329,16 @@ class MusicControls(View):
 
     async def play_pause_callback(self, interaction: discord.Interaction):
         """Пауза/Возобновление"""
+        if not member_can_control(interaction):
+            return await deny_control(interaction)
         await self.cog.toggle_play_pause(self.guild_id)
         await interaction.response.defer()
         await self.cog.update_now_playing(self.guild_id)
 
     async def skip_callback(self, interaction: discord.Interaction):
         """Пропуск трека"""
+        if not member_can_control(interaction):
+            return await deny_control(interaction)
         guild = self.cog.bot.get_guild(self.guild_id)
         if guild and guild.voice_client:
             guild.voice_client.stop()
@@ -305,11 +348,15 @@ class MusicControls(View):
 
     async def stop_callback(self, interaction: discord.Interaction):
         """Остановка и очистка"""
+        if not member_can_control(interaction):
+            return await deny_control(interaction)
         await self.cog.stop_playback(self.guild_id)
         await interaction.response.send_message("⏹️ Воспроизведение остановлено", ephemeral=True, delete_after=3)
 
     async def repeat_callback(self, interaction: discord.Interaction):
         """Переключение режима повтора"""
+        if not member_can_control(interaction):
+            return await deny_control(interaction)
         modes = ['none', 'track', 'queue']
         current = self.cog.repeat_mode.get(self.guild_id, 'none')
         next_mode = modes[(modes.index(current) + 1) % len(modes)]
@@ -325,6 +372,8 @@ class MusicControls(View):
 
     async def shuffle_callback(self, interaction: discord.Interaction):
         """Перемешать очередь"""
+        if not member_can_control(interaction):
+            return await deny_control(interaction)
         queue = self.cog.get_queue(self.guild_id)
         if len(queue) < 2:
             await interaction.response.send_message("❌ Недостаточно треков для перемешивания", ephemeral=True, delete_after=3)
@@ -352,6 +401,8 @@ class MusicControls(View):
 
     async def volume_up_callback(self, interaction: discord.Interaction):
         """Увеличить громкость"""
+        if not member_can_control(interaction):
+            return await deny_control(interaction)
         current = self.cog.current.get(self.guild_id)
         if current:
             new_volume = min(current.volume + 0.1, 2.0)
@@ -367,6 +418,8 @@ class MusicControls(View):
 
     async def volume_down_callback(self, interaction: discord.Interaction):
         """Уменьшить громкость"""
+        if not member_can_control(interaction):
+            return await deny_control(interaction)
         current = self.cog.current.get(self.guild_id)
         if current:
             new_volume = max(current.volume - 0.1, 0.0)
@@ -379,6 +432,18 @@ class MusicControls(View):
             await self.cog.update_now_playing(self.guild_id)
         else:
             await interaction.response.send_message("❌ Ничего не играет", ephemeral=True, delete_after=3)
+
+    async def on_timeout(self):
+        """Отключаем кнопки после истечения таймаута"""
+        for item in self.children:
+            item.disabled = True
+        # Пытаемся обновить сообщение с отключёнными кнопками
+        msg = self.cog.now_playing_messages.get(self.guild_id)
+        if msg:
+            try:
+                await msg.edit(view=self)
+            except (discord.NotFound, discord.HTTPException):
+                pass
 
 
 class TrackInfo:
@@ -399,18 +464,18 @@ class Music(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         # Состояние для каждой гильдии
-        self.queues: Dict[int, List] = {}
-        self.current: Dict[int, discord.PCMVolumeTransformer] = {}
-        self.current_track_info: Dict[int, TrackInfo] = {}  # Информация о текущем треке для повтора
-        self.repeat_mode: Dict[int, str] = {}  # 'none', 'track', 'queue'
-        self.shuffle_mode: Dict[int, bool] = {}  # Режим shuffle
-        self.queue_locks: Dict[int, asyncio.Lock] = {}
-        self.inactive_timers: Dict[int, asyncio.Task] = {}
-        self.now_playing_messages: Dict[int, discord.Message] = {}
+        self.queues: dict[int, list] = {}
+        self.current: dict[int, discord.PCMVolumeTransformer] = {}
+        self.current_track_info: dict[int, TrackInfo] = {}  # Информация о текущем треке для повтора
+        self.repeat_mode: dict[int, str] = {}  # 'none', 'track', 'queue'
+        self.shuffle_mode: dict[int, bool] = {}  # Режим shuffle
+        self.queue_locks: dict[int, asyncio.Lock] = {}
+        self.inactive_timers: dict[int, asyncio.Task] = {}
+        self.now_playing_messages: dict[int, discord.Message] = {}
 
         logger.info("Music cog loaded with enhanced features")
 
-    def get_queue(self, guild_id: int) -> List:
+    def get_queue(self, guild_id: int) -> list:
         """Получить очередь для гильдии"""
         return self.queues.setdefault(guild_id, [])
 
@@ -419,6 +484,65 @@ class Music(commands.Cog):
         if guild_id not in self.queue_locks:
             self.queue_locks[guild_id] = asyncio.Lock()
         return self.queue_locks[guild_id]
+
+    async def ensure_voice(self, ctx: commands.Context):
+        """
+        Проверяет, что автор в голосовом канале, и подключает бота к нему.
+
+        Returns:
+            VoiceClient или None, если подключиться не удалось
+            (сообщение об ошибке уже отправлено).
+
+        Raises:
+            commands.CheckFailure: автор не в voice-канале или бот занят в другом.
+        """
+        author_voice = getattr(ctx.author, 'voice', None)
+        if not author_voice or not author_voice.channel:
+            raise commands.CheckFailure('Вы должны находиться в голосовом канале')
+
+        vc = ctx.voice_client
+        if vc and vc.is_connected():
+            if vc.channel != author_voice.channel:
+                raise commands.CheckFailure('Бот уже играет в другом голосовом канале')
+            return vc
+
+        try:
+            vc = await author_voice.channel.connect()
+            logger.info(f"Connected to voice channel in guild {ctx.guild.id}")
+            return vc
+        except Exception as e:
+            logger.error(f"Failed to connect to voice: {e}")
+            embed = discord.Embed(
+                title="❌ Ошибка подключения",
+                description="Не удалось подключиться к голосовому каналу",
+                color=0xFF6B6B
+            )
+            await ctx.send(embed=embed)
+            return None
+
+    @commands.Cog.listener()
+    async def on_voice_state_update(self, member, before, after):
+        """Следим за voice-каналом: авто-выход из пустого канала, чистка при кике"""
+        guild = member.guild
+
+        # Бота отключили от канала (kick/disconnect) — чистим состояние
+        if member.id == self.bot.user.id and before.channel is not None and after.channel is None:
+            logger.info(f"Bot disconnected from voice in guild {guild.id}, cleaning up")
+            await self._cleanup_state(guild.id)
+            return
+
+        vc = guild.voice_client
+        if not vc or not vc.channel:
+            return
+
+        humans = [m for m in vc.channel.members if not m.bot]
+        if not humans:
+            # Все слушатели вышли — отключаемся через 2 минуты
+            logger.info(f"Voice channel empty in guild {guild.id}, starting leave timer")
+            self.start_inactivity_timer(guild.id, delay=120)
+        elif vc.is_playing() or vc.is_paused():
+            # Слушатели вернулись и музыка играет — таймер не нужен
+            self.cancel_inactivity_timer(guild.id)
 
     async def process_queue(self, guild_id: int):
         """
@@ -446,8 +570,12 @@ class Music(commands.Cog):
                 self.start_inactivity_timer(guild_id)
                 return
 
-            # Отменяем таймер, если он был
-            self.cancel_inactivity_timer(guild_id)
+            # Отменяем таймер, если он был.
+            # Но не тогда, когда в канале нет слушателей: иначе бот с включённым
+            # повтором будет вечно играть в пустом канале.
+            humans = [m for m in voice_client.channel.members if not m.bot]
+            if humans:
+                self.cancel_inactivity_timer(guild_id)
 
             # Берём следующий трек
             player = queue.pop(0)
@@ -527,13 +655,13 @@ class Music(commands.Cog):
         # Обрабатываем следующий трек
         await self.process_queue(guild_id)
 
-    def start_inactivity_timer(self, guild_id: int):
-        """Запускает таймер на отключение при неактивности (10 минут)"""
+    def start_inactivity_timer(self, guild_id: int, delay: int = 600):
+        """Запускает таймер на отключение при неактивности (по умолчанию 10 минут)"""
         self.cancel_inactivity_timer(guild_id)
 
         async def timer():
             try:
-                await asyncio.sleep(600)  # 10 минут
+                await asyncio.sleep(delay)
                 await self.stop_playback(guild_id)
                 logger.info(f"Disconnected from guild {guild_id} due to inactivity")
             except asyncio.CancelledError:
@@ -550,27 +678,27 @@ class Music(commands.Cog):
     async def stop_playback(self, guild_id: int):
         """Полная остановка воспроизведения и очистка состояния"""
         guild = self.bot.get_guild(guild_id)
-        if not guild:
-            return
+        if guild and guild.voice_client:
+            guild.voice_client.stop()
+            await guild.voice_client.disconnect()
 
-        voice_client = guild.voice_client
-        if voice_client:
-            voice_client.stop()
-            await voice_client.disconnect()
+        await self._cleanup_state(guild_id)
 
-        # Очистка состояния
+    async def _cleanup_state(self, guild_id: int):
+        """Сбрасывает состояние гильдии: очередь, режимы, таймеры, панель управления"""
         self.queues.pop(guild_id, None)
         self.current.pop(guild_id, None)
+        self.current_track_info.pop(guild_id, None)
         self.repeat_mode.pop(guild_id, None)
+        self.shuffle_mode.pop(guild_id, None)
         self.cancel_inactivity_timer(guild_id)
 
-        # Удаляем панель управления
-        if guild_id in self.now_playing_messages:
+        msg = self.now_playing_messages.pop(guild_id, None)
+        if msg:
             try:
-                await self.now_playing_messages[guild_id].delete()
+                await msg.delete()
             except (discord.NotFound, discord.HTTPException):
                 pass
-            del self.now_playing_messages[guild_id]
 
     async def toggle_play_pause(self, guild_id: int):
         """Переключение паузы/воспроизведения"""
@@ -704,10 +832,14 @@ class Music(commands.Cog):
                 # Удаляем старое сообщение
                 try:
                     await old_msg.delete()
-                except:
+                except (discord.NotFound, discord.HTTPException):
                     pass
             else:
-                channel = guild.text_channels[0] if guild.text_channels else None
+                # Первый текстовый канал, куда бот реально может писать
+                channel = next(
+                    (c for c in guild.text_channels if c.permissions_for(guild.me).send_messages),
+                    None
+                )
 
         if channel:
             try:
@@ -726,29 +858,10 @@ class Music(commands.Cog):
         # Defer сразу - Discord дает только 3 секунды на ответ
         await ctx.defer()
 
-        # Проверка: пользователь в голосовом канале
-        if not ctx.author.voice:
-            embed = discord.Embed(
-                title="❌ Ошибка",
-                description="Вы должны находиться в голосовом канале",
-                color=0xFF6B6B
-            )
-            return await ctx.send(embed=embed, ephemeral=True)
-
-        # Подключаемся к каналу, если ещё не подключены
-        voice_client = ctx.voice_client
-        if not voice_client:
-            try:
-                voice_client = await ctx.author.voice.channel.connect()
-                logger.info(f"Connected to voice channel in guild {ctx.guild.id}")
-            except Exception as e:
-                logger.error(f"Failed to connect to voice: {e}")
-                embed = discord.Embed(
-                    title="❌ Ошибка подключения",
-                    description="Не удалось подключиться к голосовому каналу",
-                    color=0xFF6B6B
-                )
-                return await ctx.send(embed=embed)
+        # Проверка voice-канала автора и подключение
+        voice_client = await self.ensure_voice(ctx)
+        if voice_client is None:
+            return
 
         # Загрузка трека
         try:
@@ -798,12 +911,13 @@ class Music(commands.Cog):
             logger.error(f"Error loading track: {e}")
             embed = discord.Embed(
                 title="❌ Ошибка загрузки",
-                description=f"Не удалось загрузить трек: {str(e)}",
+                description=f"Не удалось загрузить трек: {e!s}",
                 color=0xFF6B6B
             )
             await ctx.send(embed=embed)
 
     @commands.hybrid_command(name="skip", description="Пропустить текущий трек")
+    @same_voice_channel()
     async def skip(self, ctx: commands.Context):
         """Пропуск текущего трека"""
         voice_client = ctx.voice_client
@@ -833,6 +947,7 @@ class Music(commands.Cog):
         await ctx.send(embed=embed)
 
     @commands.hybrid_command(name="stop", description="Остановить воспроизведение и очистить очередь")
+    @same_voice_channel()
     async def stop(self, ctx: commands.Context):
         """Полная остановка"""
         await self.stop_playback(ctx.guild.id)
@@ -845,6 +960,7 @@ class Music(commands.Cog):
         await ctx.send(embed=embed)
 
     @commands.hybrid_command(name="pause", description="Приостановить воспроизведение")
+    @same_voice_channel()
     async def pause(self, ctx: commands.Context):
         """Пауза"""
         voice_client = ctx.voice_client
@@ -863,6 +979,7 @@ class Music(commands.Cog):
             await ctx.send(embed=embed, ephemeral=True)
 
     @commands.hybrid_command(name="resume", description="Возобновить воспроизведение")
+    @same_voice_channel()
     async def resume(self, ctx: commands.Context):
         """Возобновление"""
         voice_client = ctx.voice_client
@@ -904,6 +1021,7 @@ class Music(commands.Cog):
         await self.update_now_playing(ctx.guild.id, channel=ctx.channel)
 
     @commands.hybrid_command(name="clear", description="Очистить очередь")
+    @same_voice_channel()
     async def clear(self, ctx: commands.Context):
         """Очистить очередь (не останавливая текущий трек)"""
         queue = self.get_queue(ctx.guild.id)
@@ -924,7 +1042,8 @@ class Music(commands.Cog):
         app_commands.Choice(name="Повтор трека", value="track"),
         app_commands.Choice(name="Повтор очереди", value="queue")
     ])
-    async def repeat(self, ctx: commands.Context, mode: str = None):
+    @same_voice_channel()
+    async def repeat(self, ctx: commands.Context, mode: str | None = None):
         """Управление режимом повтора"""
         if mode is None:
             # Переключение по кругу
@@ -964,34 +1083,12 @@ class Music(commands.Cog):
 
         await ctx.defer()
 
-        # Проверка голосового канала
-        if not ctx.author.voice:
-            embed = discord.Embed(
-                title="❌ Ошибка",
-                description="Вы должны находиться в голосовом канале",
-                color=0xFF6B6B
-            )
-            return await ctx.send(embed=embed, ephemeral=True)
-
-        # Подключаемся к каналу если ещё не подключены
-        voice_client = ctx.voice_client
-        if not voice_client:
-            try:
-                voice_client = await ctx.author.voice.channel.connect()
-                logger.info(f"Connected to voice channel in guild {ctx.guild.id}")
-            except Exception as e:
-                logger.error(f"Failed to connect to voice: {e}")
-                embed = discord.Embed(
-                    title="❌ Ошибка подключения",
-                    description="Не удалось подключиться к голосовому каналу",
-                    color=0xFF6B6B
-                )
-                return await ctx.send(embed=embed)
+        # Проверка voice-канала автора и подключение
+        voice_client = await self.ensure_voice(ctx)
+        if voice_client is None:
+            return
 
         try:
-            # Импортируем ytdl для поиска
-            from utils.ytdl import ytdl
-
             # Поиск треков
             search_query = f"ytsearch10:{query}"
             data = await self.bot.loop.run_in_executor(
@@ -1048,7 +1145,7 @@ class Music(commands.Cog):
             logger.error(f"Error in search command: {e}")
             embed = discord.Embed(
                 title="❌ Ошибка поиска",
-                description=f"Не удалось выполнить поиск: {str(e)}",
+                description=f"Не удалось выполнить поиск: {e!s}",
                 color=0xFF6B6B
             )
             await ctx.send(embed=embed)
@@ -1060,37 +1157,19 @@ class Music(commands.Cog):
 
         await ctx.defer()
 
-        # Проверка голосового канала
-        if not ctx.author.voice:
-            embed = discord.Embed(
-                title="❌ Ошибка",
-                description="Вы должны находиться в голосовом канале",
-                color=0xFF6B6B
-            )
-            return await ctx.send(embed=embed, ephemeral=True)
+        # Разрешаем только http(s)-ссылки
+        url = validate_query(url)
 
-        # Подключаемся к каналу
-        voice_client = ctx.voice_client
-        if not voice_client:
-            try:
-                voice_client = await ctx.author.voice.channel.connect()
-                logger.info(f"Connected to voice channel in guild {ctx.guild.id}")
-            except Exception as e:
-                logger.error(f"Failed to connect to voice: {e}")
-                embed = discord.Embed(
-                    title="❌ Ошибка подключения",
-                    description="Не удалось подключиться к голосовому каналу",
-                    color=0xFF6B6B
-                )
-                return await ctx.send(embed=embed)
+        # Проверка voice-канала автора и подключение
+        voice_client = await self.ensure_voice(ctx)
+        if voice_client is None:
+            return
 
         try:
-            from utils.ytdl import ytdl
-
-            # Загружаем инфо о плейлисте
+            # Загружаем инфо о плейлисте (отдельный инстанс с включёнными плейлистами)
             playlist_info = await self.bot.loop.run_in_executor(
                 None,
-                lambda: ytdl.extract_info(url, download=False, process=False)
+                lambda: ytdl_playlist.extract_info(url, download=False, process=False)
             )
 
             if not playlist_info or 'entries' not in playlist_info:
@@ -1137,7 +1216,7 @@ class Music(commands.Cog):
                 logger.error(f"Failed to load first track: {e}")
                 embed = discord.Embed(
                     title="❌ Ошибка",
-                    description=f"Не удалось загрузить первый трек плейлиста: {str(e)}",
+                    description=f"Не удалось загрузить первый трек плейлиста: {e!s}",
                     color=0xFF6B6B
                 )
                 return await ctx.send(embed=embed)
@@ -1201,7 +1280,7 @@ class Music(commands.Cog):
             logger.error(f"Error loading playlist: {e}")
             embed = discord.Embed(
                 title="❌ Ошибка загрузки плейлиста",
-                description=f"Не удалось загрузить плейлист: {str(e)}",
+                description=f"Не удалось загрузить плейлист: {e!s}",
                 color=0xFF6B6B
             )
             await ctx.send(embed=embed)

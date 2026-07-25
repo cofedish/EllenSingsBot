@@ -1,0 +1,40 @@
+# Git и CI
+.git
+.github
+.gitignore
+.gitattributes
+
+# Секреты в образ не попадают — передаются через environment/secrets
+.env
+.env.*
+
+# Gateway собирается из своего контекста (./gateway)
+gateway/
+
+# Документация и dev-файлы
+*.md
+.claude
+.editorconfig
+.vscode
+.idea
+
+# Бинарники и архивы
+tun2socks
+*.tar
+*.tar.gz
+
+# Python кэш
+__pycache__
+*.pyc
+*.pyo
+.pytest_cache
+.ruff_cache
+
+# Виртуальное окружение
+venv
+.venv
+env
+
+# Логи и временные файлы
+*.log
+*.tmp

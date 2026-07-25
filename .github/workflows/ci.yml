@@ -1,0 +1,74 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  python-checks:
+    name: ruff + bandit + pip-audit
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install tools
+        run: pip install ruff "bandit[toml]" pip-audit
+
+      - name: ruff (линтер)
+        run: ruff check .
+
+      - name: bandit (SAST)
+        run: bandit -c pyproject.toml -ll -r bot.py healthcheck.py cogs utils
+
+      # PYSEC-2026-3002: libsodium crypto_core_ed25519_is_valid_point.
+      # Discord Voice использует только AEAD-примитивы, уязвимый API не вызывается.
+      # PyNaCl нельзя поднять до 1.6.2, пока discord.py требует <1.6 — см. requirements.txt.
+      - name: pip-audit (CVE в зафиксированных зависимостях)
+        run: pip-audit -r requirements.txt --ignore-vuln PYSEC-2026-3002
+
+  hadolint:
+    name: hadolint (Dockerfiles)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: hadolint (bot)
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: Dockerfile
+
+      - name: hadolint (gateway)
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: gateway/Dockerfile
+
+  trivy:
+    name: trivy (vulns + secrets + misconfig)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Trivy filesystem scan
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,secret,misconfig
+          severity: CRITICAL,HIGH
+          exit-code: "1"
+          ignore-unfixed: true

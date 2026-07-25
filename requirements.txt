@@ -1,7 +1,10 @@
-discord.py[voice]>=2.3.0
-yt-dlp>=2023.12.0
-python-dotenv>=1.0.0
+# Версии зафиксированы (pinned) — обновлять осознанно, проверяя pip-audit.
+# CI гоняет pip-audit по этому файлу на каждый push.
+discord.py[voice]==2.7.1
+yt-dlp==2026.7.4
+python-dotenv==1.2.2
+# discord.py[voice] 2.7.x требует PyNaCl >=1.5.0,<1.6.
+# PYSEC-2026-3002 (libsodium ed25519_is_valid_point) не затрагивает Discord Voice
+# (используется только AEAD) — исключение задокументировано в CI (pip-audit --ignore-vuln).
+# Снять пин и исключение, когда discord.py разрешит PyNaCl >=1.6.
 PyNaCl==1.5.0
-pycairo==1.25.1
-PyGObject==3.44.1
-aiohttp-socks>=0.8.0
