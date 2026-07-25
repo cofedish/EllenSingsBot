@@ -44,6 +44,7 @@ echo "[net] proxy ip: ${PROXY_IP}"
 # Embedded DNS Docker (127.0.0.11) форвардит внешние запросы С ХОСТА,
 # т.е. мимо туннеля. После резолва адреса прокси переключаем контейнер
 # на публичный резолвер: эти запросы пойдут через tun0 -> прокси.
+# Ниже 127.0.0.11:53 дополнительно блокируется iptables.
 # /etc/resolv.conf остаётся записываемым даже при read_only rootfs.
 DNS_SERVERS="${DNS_SERVERS:-1.1.1.1 1.0.0.1}"
 if {
@@ -53,8 +54,22 @@ if {
 } > /etc/resolv.conf 2>/dev/null; then
     echo "[dns] resolv.conf -> ${DNS_SERVERS} (queries go through the tunnel)"
 else
-    echo "[dns] WARNING: cannot rewrite /etc/resolv.conf, DNS may leak via host" >&2
+    # Fail-closed: без гарантии DNS-через-туннель не работаем вовсе
+    echo "ERROR: cannot rewrite /etc/resolv.conf — refusing to run with leaky DNS" >&2
+    exit 1
 fi
+
+# Bootstrap-резолв хоста прокси выше — единственный DNS-запрос, который мог
+# уйти через резолвер хоста. Если PROXY_HOST задан IP-литералом или прописан
+# в /etc/hosts (host.docker.internal) — утечки нет вообще.
+case "$PROXY_HOST" in
+    *[!0-9.]*)
+        if ! grep -qw "$PROXY_HOST" /etc/hosts; then
+            echo "[dns] NOTE: proxy hostname was resolved once via host DNS at startup;"
+            echo "[dns]       set PROXY_URL with an IP literal to avoid this bootstrap query"
+        fi
+        ;;
+esac
 
 GATEWAY_IP=$(ip -4 route show default | awk '{print $3; exit}')
 if [ -z "$GATEWAY_IP" ]; then
@@ -78,17 +93,22 @@ echo "[net] default route -> ${TUN_DEV}; ${PROXY_IP}/32 -> via ${GATEWAY_IP}"
 # --- Kill-switch: разрешены только loopback, TUN и сам прокси ---
 iptables -F OUTPUT
 iptables -P OUTPUT DROP
+# Embedded DNS Docker (127.0.0.11) — до общего разрешения loopback:
+# он форвардит запросы с хоста в обход туннеля
+iptables -A OUTPUT -d 127.0.0.11 -p udp --dport 53 -j REJECT
+iptables -A OUTPUT -d 127.0.0.11 -p tcp --dport 53 -j REJECT
 iptables -A OUTPUT -o lo -j ACCEPT
 iptables -A OUTPUT -o "$TUN_DEV" -j ACCEPT
 # Управляющее TCP-соединение SOCKS5
 iptables -A OUTPUT -d "$PROXY_IP" -p tcp --dport "$PROXY_PORT" -j ACCEPT
-# UDP ASSOCIATE: relay-порт выделяется прокси динамически,
-# поэтому разрешаем UDP к хосту прокси целиком
+# UDP ASSOCIATE: relay-порт выделяется прокси динамически, поэтому UDP
+# разрешён к хосту прокси целиком. Если SOCKS-сервер вернёт relay на ДРУГОМ
+# адресе — трафик будет заблокирован (fail-closed), это поймает self-test ниже.
 iptables -A OUTPUT -d "$PROXY_IP" -p udp -j ACCEPT
-iptables -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+# Бланкетного ESTABLISHED-правила нет: всё необходимое покрыто явными правилами
 # IPv6 блокируем полностью: TUN-маршрут обслуживает только IPv4
-if command -v ip6tables >/dev/null 2>&1; then
-    ip6tables -P OUTPUT DROP 2>/dev/null || true
+if ! ip6tables -P OUTPUT DROP 2>/dev/null; then
+    echo "[fw] IPv6 netfilter unavailable (IPv6 already disabled via sysctl)"
 fi
 echo "[fw] kill-switch active: direct egress allowed only to ${PROXY_IP}"
 
@@ -117,6 +137,29 @@ shutdown() {
     kill -TERM "$T2S_PID" 2>/dev/null || true
 }
 trap shutdown TERM INT
+
+# --- Self-test UDP-пути (обязательный, fail-closed) ---
+# DNS-запрос уходит по UDP через tun0 -> tun2socks -> SOCKS5 UDP ASSOCIATE.
+# Если прокси не поддерживает UDP ASSOCIATE или relay-адрес недостижим,
+# завершаемся с ошибкой: бот не стартует (depends_on: service_healthy),
+# вместо молчащего Discord Voice.
+attempt=0
+until getent hosts discord.com >/dev/null 2>&1; do
+    attempt=$((attempt + 1))
+    if [ "$attempt" -ge 6 ]; then
+        echo "ERROR: UDP path through proxy failed (no UDP ASSOCIATE support" >&2
+        echo "       or relay unreachable) — refusing to run without working UDP" >&2
+        kill -TERM "$T2S_PID" 2>/dev/null || true
+        exit 1
+    fi
+    if ! kill -0 "$T2S_PID" 2>/dev/null; then
+        echo "ERROR: tun2socks died during startup" >&2
+        exit 1
+    fi
+    echo "[selftest] UDP path not ready yet (attempt ${attempt}/5), retrying..."
+    sleep 2
+done
+echo "[selftest] UDP through proxy OK: DNS via tunnel works (UDP ASSOCIATE confirmed)"
 
 # Первый wait может прерваться сигналом; дожидаемся фактического выхода процесса
 set +e
