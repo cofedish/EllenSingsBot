@@ -35,6 +35,8 @@ services:
       # /run — конфиг tun2socks и xtables.lock
       - /run:rw,noexec,nosuid,size=8m
       - /tmp:rw,noexec,nosuid,size=8m
+    volumes:
+      - ./gateway/resolv.conf:/etc/resolv.conf:ro
 
     environment:
       - TZ=${TZ:-Europe/Moscow}
@@ -95,6 +97,8 @@ services:
     tmpfs:
       # heartbeat-файл, HOME и временные файлы yt-dlp/ffmpeg
       - /tmp:rw,noexec,nosuid,size=128m
+    volumes:
+      - ./gateway/resolv.conf:/etc/resolv.conf:ro
 
     environment:
       - TZ=${TZ:-Europe/Moscow}
@@ -114,11 +118,13 @@ services:
         max-size: "10m"
         max-file: "3"
 
-# Изолированная сеть только для шлюза (бот живёт в его namespace)
+# Постоянная выделенная сеть для доступа к Xray на хосте.
+# Создаётся один раз:
+#   docker network create --driver bridge \
+#     --subnet 172.29.0.0/24 --gateway 172.29.0.1 xray-proxy
+# Xray слушает только gateway-адрес этой сети (172.29.0.1), поэтому
+# inbound недоступен из LAN и интернета.
 networks:
   bot-net:
-    driver: bridge
-    ipam:
-      config:
-        - subnet: 172.28.16.0/28
-          gateway: 172.28.16.1
+    name: xray-proxy
+    external: true

@@ -40,21 +40,10 @@ if [ -z "$PROXY_IP" ]; then
 fi
 echo "[net] proxy ip: ${PROXY_IP}"
 
-# --- DNS без утечек ---
-# Embedded DNS Docker (127.0.0.11) форвардит внешние запросы С ХОСТА,
-# т.е. мимо туннеля. После резолва адреса прокси переключаем контейнер
-# на публичный резолвер: эти запросы пойдут через tun0 -> прокси.
-# /etc/resolv.conf остаётся записываемым даже при read_only rootfs.
-DNS_SERVERS="${DNS_SERVERS:-1.1.1.1 1.0.0.1}"
-if {
-    for ns in $DNS_SERVERS; do
-        echo "nameserver $ns"
-    done
-} > /etc/resolv.conf 2>/dev/null; then
-    echo "[dns] resolv.conf -> ${DNS_SERVERS} (queries go through the tunnel)"
-else
-    echo "[dns] WARNING: cannot rewrite /etc/resolv.conf, DNS may leak via host" >&2
-fi
+# /etc/resolv.conf монтируется read-only из gateway/resolv.conf одновременно
+# в gateway и bot. Публичные DNS-адреса маршрутизируются через tun0, поэтому
+# Docker embedded DNS (127.0.0.11), форвардящий запросы с хоста, не используется.
+echo "[dns] static resolv.conf active (queries go through the tunnel)"
 
 GATEWAY_IP=$(ip -4 route show default | awk '{print $3; exit}')
 if [ -z "$GATEWAY_IP" ]; then
@@ -109,11 +98,16 @@ loglevel: ${T2S_LOGLEVEL:-warning}
 EOF
 
 echo "[tun2socks] starting..."
-tun2socks -config "$CONF" &
+tun2socks --config "$CONF" &
 T2S_PID=$!
 
+echo "[dns] starting local DNS-over-TLS resolver..."
+unbound -d -c /etc/unbound/ellensings.conf &
+DNS_PID=$!
+
 shutdown() {
-    echo "[gateway] signal received, stopping tun2socks (pid ${T2S_PID})"
+    echo "[gateway] signal received, stopping resolver and tun2socks"
+    kill -TERM "$DNS_PID" 2>/dev/null || true
     kill -TERM "$T2S_PID" 2>/dev/null || true
 }
 trap shutdown TERM INT
