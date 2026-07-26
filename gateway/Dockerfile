@@ -38,11 +38,13 @@ RUN apk add --no-cache \
     iproute2 \
     iptables \
     musl-utils \
+    unbound \
     curl \
     ca-certificates
 
 COPY --from=build /out/tun2socks /usr/local/bin/tun2socks
 COPY entrypoint.sh healthcheck.sh /usr/local/bin/
+COPY unbound.conf /etc/unbound/ellensings.conf
 RUN chmod 755 /usr/local/bin/entrypoint.sh /usr/local/bin/healthcheck.sh
 
 # Проверяем не «жив ли процесс», а фактическую работоспособность маршрута

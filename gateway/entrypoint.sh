@@ -40,24 +40,10 @@ if [ -z "$PROXY_IP" ]; then
 fi
 echo "[net] proxy ip: ${PROXY_IP}"
 
-# --- DNS без утечек ---
-# Embedded DNS Docker (127.0.0.11) форвардит внешние запросы С ХОСТА,
-# т.е. мимо туннеля. После резолва адреса прокси переключаем контейнер
-# на публичный резолвер: эти запросы пойдут через tun0 -> прокси.
-# Ниже 127.0.0.11:53 дополнительно блокируется iptables.
-# /etc/resolv.conf остаётся записываемым даже при read_only rootfs.
-DNS_SERVERS="${DNS_SERVERS:-1.1.1.1 1.0.0.1}"
-if {
-    for ns in $DNS_SERVERS; do
-        echo "nameserver $ns"
-    done
-} > /etc/resolv.conf 2>/dev/null; then
-    echo "[dns] resolv.conf -> ${DNS_SERVERS} (queries go through the tunnel)"
-else
-    # Fail-closed: без гарантии DNS-через-туннель не работаем вовсе
-    echo "ERROR: cannot rewrite /etc/resolv.conf — refusing to run with leaky DNS" >&2
-    exit 1
-fi
+# /etc/resolv.conf монтируется read-only из gateway/resolv.conf одновременно
+# в gateway и bot. Локальный Unbound отправляет DNS-over-TLS через tun0,
+# поэтому Docker embedded DNS, форвардящий запросы с хоста, не используется.
+echo "[dns] static resolv.conf active (queries go through the tunnel)"
 
 # Bootstrap-резолв хоста прокси выше — единственный DNS-запрос, который мог
 # уйти через резолвер хоста. Если PROXY_HOST задан IP-литералом или прописан
@@ -129,37 +115,41 @@ loglevel: ${T2S_LOGLEVEL:-warning}
 EOF
 
 echo "[tun2socks] starting..."
-tun2socks -config "$CONF" &
+tun2socks --config "$CONF" &
 T2S_PID=$!
 
+echo "[dns] starting local DNS-over-TLS resolver..."
+unbound -d -c /etc/unbound/ellensings.conf &
+DNS_PID=$!
+
 shutdown() {
-    echo "[gateway] signal received, stopping tun2socks (pid ${T2S_PID})"
+    echo "[gateway] signal received, stopping resolver and tun2socks"
+    kill -TERM "$DNS_PID" 2>/dev/null || true
     kill -TERM "$T2S_PID" 2>/dev/null || true
 }
 trap shutdown TERM INT
 
-# --- Self-test UDP-пути (обязательный, fail-closed) ---
-# DNS-запрос уходит по UDP через tun0 -> tun2socks -> SOCKS5 UDP ASSOCIATE.
-# Если прокси не поддерживает UDP ASSOCIATE или relay-адрес недостижим,
-# завершаемся с ошибкой: бот не стартует (depends_on: service_healthy),
-# вместо молчащего Discord Voice.
+# --- Self-test DNS/TCP-пути (обязательный, fail-closed) ---
+# DNS идёт локально в Unbound, затем как DNS-over-TLS через TUN/SOCKS.
+# UDP ASSOCIATE используется Discord Voice и проверяется реальным голосовым
+# подключением; DNS намеренно не зависит от доступности публичного UDP/53.
 attempt=0
 until getent hosts discord.com >/dev/null 2>&1; do
     attempt=$((attempt + 1))
     if [ "$attempt" -ge 6 ]; then
-        echo "ERROR: UDP path through proxy failed (no UDP ASSOCIATE support" >&2
-        echo "       or relay unreachable) — refusing to run without working UDP" >&2
+        echo "ERROR: DNS-over-TLS path through proxy failed" >&2
         kill -TERM "$T2S_PID" 2>/dev/null || true
+        kill -TERM "$DNS_PID" 2>/dev/null || true
         exit 1
     fi
     if ! kill -0 "$T2S_PID" 2>/dev/null; then
         echo "ERROR: tun2socks died during startup" >&2
         exit 1
     fi
-    echo "[selftest] UDP path not ready yet (attempt ${attempt}/5), retrying..."
+    echo "[selftest] DNS-over-TLS path not ready yet (attempt ${attempt}/5), retrying..."
     sleep 2
 done
-echo "[selftest] UDP through proxy OK: DNS via tunnel works (UDP ASSOCIATE confirmed)"
+echo "[selftest] DNS-over-TLS through proxy OK"
 
 # Первый wait может прерваться сигналом; дожидаемся фактического выхода процесса
 set +e
