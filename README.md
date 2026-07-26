@@ -136,10 +136,20 @@ https://discord.com/api/oauth2/authorize?client_id=ВАШ_CLIENT_ID&permissions=
 
 - `PROXY_URL` задаётся в `.env`: `socks5://host:port` или `socks5://user:pass@host:port`.
   Прокси на хосте доступен из контейнера как `host.docker.internal`.
-- **UDP ASSOCIATE обязателен** — Discord Voice работает по UDP.
+- **UDP ASSOCIATE обязателен** — Discord Voice работает по UDP. При старте шлюз
+  выполняет **обязательный self-test**: DNS-запрос по UDP через
+  tun0 → SOCKS5 UDP relay. Если UDP через прокси не работает — шлюз завершается
+  с ошибкой и бот не стартует (fail-closed, а не «голос молчит»).
 - Kill-switch в шлюзе: `OUTPUT DROP` по умолчанию; разрешены только loopback,
-  TUN-интерфейс и адрес прокси. DNS уходит на публичный резолвер **через туннель**
-  (без утечки DNS через хост). IPv6 отключён и заблокирован.
+  TUN-интерфейс и адрес прокси. Если SOCKS-сервер возвращает UDP-relay на другом
+  адресе — трафик блокируется (fail-closed), это ловит self-test.
+- DNS-утечки закрыты с двух сторон: `/etc/resolv.conf` переключается на публичный
+  резолвер (запросы идут **через туннель**; невозможность переписать файл =
+  отказ запуска), а embedded DNS Docker (`127.0.0.11:53`), который форвардит
+  запросы с хоста мимо туннеля, **заблокирован iptables**. Единственный
+  bootstrap-запрос — резолв хоста прокси при старте; его нет вообще, если
+  `PROXY_URL` задан IP-литералом или `host.docker.internal` (берётся
+  из `/etc/hosts`). IPv6 отключён и заблокирован.
 - URL прокси с логином/паролем **не пишется в логи** (логируется только host:port),
   а tun2socks получает его через конфиг-файл, а не argv.
 
@@ -205,9 +215,11 @@ EllenSingsV2/
 
 ## 🐛 Известные проблемы и решения
 
-### Шлюз unhealthy
-- Проверь, что прокси доступен из Docker-сети и поддерживает **UDP ASSOCIATE**.
-- `docker compose logs gateway` — kill-switch и tun2socks пишут диагностику.
+### Шлюз падает при старте или unhealthy
+- `ERROR: UDP path through proxy failed` — прокси не поддерживает **UDP ASSOCIATE**
+  или его UDP-relay недоступен из Docker-сети. Включи UDP в socks-inbound прокси.
+- Проверь, что прокси слушает на адресе, доступном из Docker-сети.
+- `docker compose logs gateway` — kill-switch, DNS и tun2socks пишут диагностику.
 
 ### Бот не подключается к голосовому каналу
 - Убедись, что у бота есть права **Connect** и **Speak** в этом канале.
