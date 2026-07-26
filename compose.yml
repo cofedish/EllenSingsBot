@@ -10,8 +10,7 @@
 #
 # Требование к хосту: modprobe tun (модуль обычно загружен).
 # Требование к прокси: SOCKS5 с поддержкой UDP ASSOCIATE,
-# иначе Discord Voice (UDP) не заработает — healthcheck шлюза
-# это выявит (DNS через туннель идёт по UDP).
+# иначе Discord Voice (UDP) не заработает.
 # ============================================================
 
 services:
@@ -35,17 +34,17 @@ services:
       # /run — конфиг tun2socks и xtables.lock
       - /run:rw,noexec,nosuid,size=8m
       - /tmp:rw,noexec,nosuid,size=8m
+    volumes:
+      - ./gateway/resolv.conf:/etc/resolv.conf:ro
 
     environment:
       - TZ=${TZ:-Europe/Moscow}
       # Прокси задаётся в .env; URL с кредами в логи не попадает
       - PROXY_URL=${PROXY_URL:?PROXY_URL is required, e.g. socks5://host.docker.internal:2080}
 
-    # DNS: entrypoint переписывает /etc/resolv.conf на публичный резолвер
-    # (по умолчанию 1.1.1.1/1.0.0.1, настраивается через DNS_SERVERS),
-    # чтобы запросы шли через туннель, а не через DNS хоста.
-    # Опция `dns:` compose здесь не помогла бы: embedded DNS Docker
-    # форвардит запросы с хоста — это утечка мимо прокси.
+    # Оба контейнера используют общий статический resolv.conf с локальным
+    # Unbound в network namespace шлюза. Unbound отправляет DNS-over-TLS
+    # через TUN; Docker embedded DNS при этом не используется.
 
     # host.docker.internal -> IP хоста (для прокси, запущенного на хосте)
     extra_hosts:
@@ -95,6 +94,8 @@ services:
     tmpfs:
       # heartbeat-файл, HOME и временные файлы yt-dlp/ffmpeg
       - /tmp:rw,noexec,nosuid,size=128m
+    volumes:
+      - ./gateway/resolv.conf:/etc/resolv.conf:ro
 
     environment:
       - TZ=${TZ:-Europe/Moscow}
@@ -114,11 +115,13 @@ services:
         max-size: "10m"
         max-file: "3"
 
-# Изолированная сеть только для шлюза (бот живёт в его namespace)
+# Постоянная выделенная сеть для доступа к Xray на хосте.
+# Создаётся один раз:
+#   docker network create --driver bridge \
+#     --subnet 172.29.0.0/24 --gateway 172.29.0.1 xray-proxy
+# Xray слушает только gateway-адрес этой сети (172.29.0.1), поэтому
+# inbound недоступен из LAN и интернета.
 networks:
   bot-net:
-    driver: bridge
-    ipam:
-      config:
-        - subnet: 172.28.16.0/28
-          gateway: 172.28.16.1
+    name: xray-proxy
+    external: true
